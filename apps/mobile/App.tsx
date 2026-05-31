@@ -1,4 +1,4 @@
-import AsyncStorage from "./src/asyncStorageShim";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { StatusBar } from "expo-status-bar";
