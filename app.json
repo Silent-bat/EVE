@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "84e01128-754f-4319-9d81-7ca5ac73da67"
+      }
+    },
+    "android": {
+      "package": "com.eve.agent"
+    }
+  }
+}

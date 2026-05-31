@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "main": "index.ts",
+  "packageManager": "pnpm@10.13.1",
+  "expo": {
+    "autolinking": {
+      "searchPaths": ["../../node_modules"]
+    }
+  },
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",

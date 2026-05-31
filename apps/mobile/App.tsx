@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import AsyncStorage from "./src/asyncStorageShim";
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { StatusBar } from "expo-status-bar";
@@ -6,6 +6,7 @@ import { Component, type ReactNode, useCallback, useEffect, useMemo, useState } 
 import {
   AppState,
   Linking,
+  NativeModules,
   Platform,
   Pressable,
   SafeAreaView,
@@ -1060,15 +1061,42 @@ function googleLoginReturnURL() {
   return "eve://auth/google";
 }
 
+let cachedGoogleSignInModule: typeof import("@react-native-google-signin/google-signin") | null = null;
+let googleSignInProbed = false;
+let googleSignInAvailable = false;
+
+function probeNativeGoogleSignIn(): boolean {
+  if (googleSignInProbed) return googleSignInAvailable;
+  googleSignInProbed = true;
+  if (Platform.OS === "web" || IS_EXPO_GO) {
+    googleSignInAvailable = false;
+    return false;
+  }
+  const turboProxy = (globalThis as { __turboModuleProxy?: (name: string) => unknown }).__turboModuleProxy;
+  const turboModule = typeof turboProxy === "function" ? turboProxy("RNGoogleSignin") : null;
+  const legacyModule = (NativeModules as Record<string, unknown>).RNGoogleSignin;
+  if (!turboModule && !legacyModule) {
+    googleSignInAvailable = false;
+    return false;
+  }
+  try {
+    cachedGoogleSignInModule = require("@react-native-google-signin/google-signin");
+    googleSignInAvailable = true;
+  } catch {
+    googleSignInAvailable = false;
+  }
+  return googleSignInAvailable;
+}
+
 function nativeGoogleSignInSupported() {
-  return Platform.OS !== "web" && !IS_EXPO_GO;
+  return probeNativeGoogleSignIn();
 }
 
 async function loadNativeGoogleSignIn(): Promise<typeof import("@react-native-google-signin/google-signin")> {
-  if (!nativeGoogleSignInSupported()) {
-    throw new Error("Gmail login requires the EVE development build. Use email/password in Expo Go.");
+  if (!probeNativeGoogleSignIn() || !cachedGoogleSignInModule) {
+    throw new Error("Gmail login requires a development build with the Google Sign-In native module.");
   }
-  return require("@react-native-google-signin/google-signin");
+  return cachedGoogleSignInModule;
 }
 
 function googleErrorCode(error: unknown) {
