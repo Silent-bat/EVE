@@ -128,10 +128,11 @@ export async function loadFromPostgres() {
  * @param {import("./state.mjs").StateShape} state
  */
 export async function saveToPostgres(state) {
-  if (!pool) throw new Error("postgres pool not initialized");
+  const activePool = pool;
+  if (!activePool) throw new Error("postgres pool not initialized");
   await Promise.all(
     Object.keys(state.users).map((userID) =>
-      pool.query(
+      activePool.query(
         `insert into app_state (user_id, payload, updated_at)
          values ($1, $2, now())
          on conflict (user_id) do update set payload = excluded.payload, updated_at = now()`,
