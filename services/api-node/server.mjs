@@ -4,41 +4,60 @@ import http from "node:http";
 import path from "node:path";
 import pg from "pg";
 
-const host = process.env.API_HOST || "127.0.0.1";
-const port = Number(process.env.API_PORT || 8080);
-const dataDir = process.env.EVE_DATA_DIR || path.join(process.cwd(), ".eve-data");
-const statePath = path.join(dataDir, "state.json");
+import { config } from "./src/config.mjs";
+import { logger, moduleLogger } from "./src/logger.mjs";
+import {
+  applySecurityHeaders,
+  handlePreflight,
+  logRequest,
+  writeErrorResponse,
+} from "./src/http/middleware.mjs";
+import {
+  HttpError,
+  httpError,
+  readJSON,
+  writeAuthRedirect,
+  writeHTML,
+  writeJSON,
+} from "./src/http/responses.mjs";
+
+const log = moduleLogger("server");
+const host = config.host;
+const port = config.port;
+const dataDir = config.dataDir;
+const statePath = config.statePath;
 const localUserID = "local-user";
-const sessionTTL = Number(process.env.AUTH_TOKEN_TTL_DAYS || 30) * 24 * 60 * 60 * 1000;
-const dbPool = process.env.DATABASE_URL
+const sessionTTL = config.authTokenTTLMs;
+const dbPool = config.databaseUrl
   ? new pg.Pool({
-      connectionString: process.env.DATABASE_URL,
+      connectionString: config.databaseUrl,
       ssl: { rejectUnauthorized: false },
     })
   : null;
 
-const jsonHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-EVE-User-ID",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
-  "Content-Type": "application/json; charset=utf-8",
-};
+const startedAt = Date.now();
 
 await initDatabase();
 let state = await loadState();
 
 const server = http.createServer(async (request, response) => {
+  applySecurityHeaders(response);
+  logRequest(request, response);
+
   try {
-    if (request.method === "OPTIONS") {
-      response.writeHead(204, jsonHeaders);
-      response.end();
-      return;
-    }
+    if (handlePreflight(request, response)) return;
 
     const url = new URL(request.url || "/", `http://${request.headers.host}`);
 
-    if (request.method === "GET" && url.pathname === "/health") {
-      writeJSON(response, 200, { status: "ok", mode: integrationMode(), storage: dbPool ? "postgres" : "json" });
+    if (request.method === "GET" && (url.pathname === "/v1/health" || url.pathname === "/health")) {
+      writeJSON(response, 200, {
+        status: "ok",
+        version: "0.2.0",
+        uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+        mode: integrationMode(),
+        storage: dbPool ? "postgres+json" : "json",
+        databaseConnected: dbPool ? await pingDatabase() : false,
+      });
       return;
     }
 
@@ -191,20 +210,58 @@ const server = http.createServer(async (request, response) => {
 
     writeJSON(response, 404, { error: "not found" });
   } catch (error) {
-    writeJSON(response, error.status || 500, { error: error.message || "internal server error" });
+    writeErrorResponse(error, request, response);
   }
 });
 
 server.listen(port, host, () => {
-  console.log(`EVE API listening at http://${host}:${port}`);
-  console.log(`Mode: ${JSON.stringify(integrationMode())}`);
+  log.info(
+    {
+      address: `http://${host}:${port}`,
+      mode: integrationMode(),
+      databaseUrl: config.databaseUrl ? "set" : "unset",
+    },
+    "EVE API listening",
+  );
 });
 
-setInterval(() => {
+const briefingInterval = setInterval(() => {
   void runDueBriefings().catch((error) => {
-    console.error(`Scheduled briefing failed: ${error.message}`);
+    log.error({ err: error }, "scheduled briefing failed");
   });
 }, 60_000);
+
+function shutdown(signal) {
+  log.info({ signal }, "shutting down");
+  clearInterval(briefingInterval);
+  server.close((err) => {
+    if (err) log.error({ err }, "server close error");
+    if (dbPool) dbPool.end().catch((err) => log.error({ err }, "db pool close error"));
+    process.exit(err ? 1 : 0);
+  });
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "uncaughtException");
+  process.exit(1);
+});
+process.on("unhandledRejection", (err) => {
+  logger.fatal({ err }, "unhandledRejection");
+  process.exit(1);
+});
+
+async function pingDatabase() {
+  if (!dbPool) return false;
+  try {
+    await dbPool.query("SELECT 1");
+    return true;
+  } catch (error) {
+    log.warn({ err: error }, "database ping failed");
+    return false;
+  }
+}
 
 async function initDatabase() {
   if (!dbPool) return;
@@ -905,10 +962,10 @@ async function briefingSource(userID, now) {
   ]);
 
   if (mailboxResult.status === "rejected") {
-    console.warn(`Gmail fetch failed: ${mailboxResult.reason?.message || mailboxResult.reason}`);
+    log.warn({ err: mailboxResult.reason }, "Gmail fetch failed");
   }
   if (calendarResult.status === "rejected") {
-    console.warn(`Google Calendar fetch failed: ${calendarResult.reason?.message || calendarResult.reason}`);
+    log.warn({ err: calendarResult.reason }, "Google Calendar fetch failed");
   }
 
   return {
@@ -946,7 +1003,7 @@ async function askAssistant(userID, input) {
       );
       return { answer, source: "gemini", generatedAt };
     } catch (error) {
-      console.warn(`Gemini assistant failed: ${error.message}`);
+      log.warn({ err: error }, "Gemini assistant failed");
     }
   }
 
@@ -1110,7 +1167,7 @@ async function deliverApprovedReply(userID, draft) {
     return { status: "sent" };
   } catch (error) {
     const message = error instanceof Error ? error.message : "gmail send failed";
-    console.warn(`Gmail send failed for ${draft.id}: ${message}`);
+    log.warn({ draftId: draft.id, message }, "Gmail send failed");
     return { status: "send-failed", error: message };
   }
 }
@@ -1173,7 +1230,7 @@ async function analyzeMessage(message, score) {
     );
     return normalizeMessageAnalysis(parseJSONFromText(text), fallback);
   } catch (error) {
-    console.warn(`Gemini email analysis failed: ${error.message}`);
+    log.warn({ err: error }, "Gemini email analysis failed");
     return fallback;
   }
 }
@@ -1211,7 +1268,7 @@ async function analyzeMessages(scoredMessages) {
       normalizeMessageAnalysis(rows[index] || {}, localMessageAnalysis(message, score)),
     );
   } catch (error) {
-    console.warn(`Gemini batch email analysis failed: ${error.message}`);
+    log.warn({ err: error }, "Gemini batch email analysis failed");
     return fallback;
   }
 }
@@ -1440,61 +1497,4 @@ function dayKey(date) {
 
 function timeKey(date) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-}
-
-async function readJSON(request) {
-  const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
-  if (chunks.length === 0) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-
-function writeJSON(response, status, payload) {
-  response.writeHead(status, jsonHeaders);
-  response.end(JSON.stringify(payload));
-}
-
-function writeHTML(response, status, message) {
-  response.writeHead(status, {
-    "Content-Type": "text/html; charset=utf-8",
-  });
-  response.end(`<!doctype html><html><body><p>${escapeHTML(message)}</p></body></html>`);
-}
-
-function writeAuthRedirect(response, token, returnTo) {
-  if (!returnTo) {
-    writeHTML(response, 200, "Google login complete. Return to EVE.");
-    return;
-  }
-
-  const separator = returnTo.includes("?") ? "&" : "?";
-  const redirectURL = `${returnTo}${separator}eve_token=${encodeURIComponent(token)}`;
-  response.writeHead(200, {
-    "Content-Type": "text/html; charset=utf-8",
-  });
-  response.end(`<!doctype html>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>EVE</title>
-<body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:32px;background:#fffdf8;color:#20242a">
-  <h1>EVE</h1>
-  <p>Google login complete. Returning to EVE.</p>
-  <script>
-    window.location.replace(${JSON.stringify(redirectURL)});
-  </script>
-  <p><a href="${escapeHTML(redirectURL)}">Return to EVE</a></p>
-</body>`);
-}
-
-function escapeHTML(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function httpError(status, message) {
-  const error = new Error(message);
-  error.status = status;
-  return error;
 }

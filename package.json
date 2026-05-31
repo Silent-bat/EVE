@@ -1,22 +1,29 @@
 {
   "name": "eve",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "EVE / BriefOS personal agent workspace",
   "packageManager": "pnpm@10.13.1",
   "workspaces": [
-    "apps/mobile"
+    "apps/mobile",
+    "services/api-node"
   ],
   "scripts": {
-    "api:start": "node services/api-node/server.mjs",
+    "api:start": "pnpm --filter @eve/api start",
+    "api:test": "pnpm --filter @eve/api test",
+    "api:typecheck": "pnpm --filter @eve/api typecheck",
     "mobile:start": "pnpm --filter @eve/mobile start",
+    "mobile:test": "pnpm --filter @eve/mobile test",
     "mobile:typecheck": "pnpm --filter @eve/mobile typecheck",
-    "v1:start": "pnpm api:start",
-    "preview": "node apps/preview/server.mjs",
-    "check": "node --check apps/preview/app.js && node --check apps/preview/server.mjs"
+    "typecheck": "pnpm api:typecheck && pnpm mobile:typecheck",
+    "test": "pnpm api:test && pnpm mobile:test",
+    "lint": "pnpm exec eslint .",
+    "lint:fix": "pnpm exec eslint --fix .",
+    "format": "pnpm exec prettier --write .",
+    "format:check": "pnpm exec prettier --check .",
+    "preview": "node apps/preview/server.mjs"
   },
   "dependencies": {
-    "eas-cli": "^20.0.0",
-    "pg": "^8.21.0"
+    "eas-cli": "^20.0.0"
   }
 }
