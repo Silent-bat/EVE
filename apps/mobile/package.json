@@ -6,7 +6,8 @@
   "packageManager": "pnpm@10.13.1",
   "expo": {
     "autolinking": {
-      "searchPaths": ["../../node_modules"]
+      "searchPaths": ["../../node_modules"],
+      "exclude": ["@expo/dom-webview"]
     }
   },
   "scripts": {
