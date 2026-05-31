@@ -40,6 +40,20 @@ import {
   statePayload,
   validTime,
 } from "./src/storage/state.mjs";
+import {
+  bearerToken,
+  createSession,
+  ensureGoogleAuthUser,
+  findAuthUserByEmail,
+  findUserByEmail,
+  login as authLogin,
+  optionalSession,
+  requireUserID,
+  revokeSession,
+  signup as authSignup,
+} from "./src/auth/index.mjs";
+import { hashPassword, hashToken, normalizeEmail } from "./src/auth/password.mjs";
+import { enforceAuthRateLimit } from "./src/auth/rate-limit.mjs";
 
 const log = moduleLogger("server");
 const host = config.host;
@@ -62,6 +76,29 @@ async function saveState() {
 
 function sessionPayload(userID) {
   return buildSessionPayload(state, userID, integrationMode());
+}
+
+function clientIP(request) {
+  const forwarded = request.headers["x-forwarded-for"];
+  const header = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  if (typeof header === "string" && header.length) return header.split(",")[0].trim();
+  return request.socket?.remoteAddress || "";
+}
+
+/**
+ * Wrap authLogin/authSignup to add rate limiting and include the session
+ * payload in the response body (matching the original API shape).
+ */
+async function signup(input, ip) {
+  enforceAuthRateLimit(ip, normalizeEmail(input?.email));
+  const { token, userID } = await authSignup(input);
+  return { token, session: sessionPayload(userID) };
+}
+
+async function login(input, ip) {
+  enforceAuthRateLimit(ip, normalizeEmail(input?.email));
+  const { token, userID } = await authLogin(input);
+  return { token, session: sessionPayload(userID) };
 }
 
 const server = http.createServer(async (request, response) => {
@@ -87,14 +124,14 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/v1/auth/signup") {
       const input = await readJSON(request);
-      const result = await signup(input);
+      const result = await signup(input, clientIP(request));
       writeJSON(response, 201, result);
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/v1/auth/login") {
       const input = await readJSON(request);
-      const result = await login(input);
+      const result = await login(input, clientIP(request));
       writeJSON(response, 200, result);
       return;
     }
@@ -277,57 +314,6 @@ process.on("unhandledRejection", (err) => {
   process.exit(1);
 });
 
-async function signup(input) {
-  const email = normalizeEmail(input.email);
-  const password = String(input.password || "");
-  if (!email) throw httpError(400, "email is required");
-  if (password.length < 8) throw httpError(400, "password must be at least 8 characters");
-
-  const passwordHash = await hashPassword(password);
-  const userID = crypto.randomUUID();
-
-  if (dbPool) {
-    try {
-      await dbPool.query("insert into users (id, email, password_hash) values ($1, $2, $3)", [
-        userID,
-        email,
-        passwordHash,
-      ]);
-    } catch (error) {
-      if (error.code === "23505") throw httpError(409, "email is already registered");
-      throw error;
-    }
-  } else if (Object.values(state.users).some((user) => user.email === email)) {
-    throw httpError(409, "email is already registered");
-  }
-
-  ensureUser(userID);
-  state.users[userID].email = email;
-  state.users[userID].passwordHash = passwordHash;
-  await saveState();
-
-  const token = await createSession(userID);
-  return { token, session: sessionPayload(userID) };
-}
-
-async function login(input) {
-  const email = normalizeEmail(input.email);
-  const password = String(input.password || "");
-  if (!email || !password) throw httpError(400, "email and password are required");
-
-  const user = await findAuthUserByEmail(email);
-  if (!user || !(await verifyPassword(password, user.passwordHash))) {
-    throw httpError(401, "invalid email or password");
-  }
-
-  ensureUser(user.id);
-  state.users[user.id].email = email;
-  await saveState();
-
-  const token = await createSession(user.id);
-  return { token, session: sessionPayload(user.id) };
-}
-
 async function googleNativeLogin(input) {
   const clientID = String(input.clientId || process.env.GOOGLE_ANDROID_CLIENT_ID || "");
   const accessToken = String(input.accessToken || "");
@@ -349,153 +335,6 @@ async function googleNativeLogin(input) {
   await saveState();
   const token = await createSession(userID);
   return { token, session: sessionPayload(userID) };
-}
-
-async function findAuthUserByEmail(email) {
-  if (dbPool) {
-    const result = await dbPool.query("select id, email, password_hash from users where email = $1", [email]);
-    const row = result.rows[0];
-    return row ? { id: row.id, email: row.email, passwordHash: row.password_hash } : null;
-  }
-
-  const entry = Object.values(state.users).find((user) => user.email === email && user.passwordHash);
-  return entry ? { id: entry.id, email: entry.email, passwordHash: entry.passwordHash } : null;
-}
-
-async function findUserByEmail(email) {
-  if (dbPool) {
-    const result = await dbPool.query("select id, email from users where email = $1", [email]);
-    const row = result.rows[0];
-    return row ? { id: row.id, email: row.email } : null;
-  }
-
-  const entry = Object.values(state.users).find((user) => user.email === email);
-  return entry ? { id: entry.id, email: entry.email } : null;
-}
-
-async function ensureGoogleAuthUser(email, tokenPayload) {
-  const normalizedEmail = normalizeEmail(email);
-  if (!normalizedEmail) throw httpError(400, "google account did not return a verified email");
-
-  const existing = await findUserByEmail(normalizedEmail);
-  const userID = existing?.id || crypto.randomUUID();
-  const passwordHash = await hashPassword(crypto.randomBytes(32).toString("base64url"));
-
-  if (dbPool && !existing) {
-    await dbPool.query("insert into users (id, email, password_hash) values ($1, $2, $3)", [
-      userID,
-      normalizedEmail,
-      passwordHash,
-    ]);
-  }
-
-  ensureUser(userID);
-  state.users[userID].email = normalizedEmail;
-  state.users[userID].googleConnected = true;
-  state.users[userID].connectionMode = "google";
-  state.users[userID].googleTokens = tokenPayload;
-  return userID;
-}
-
-async function createSession(userID) {
-  const token = crypto.randomBytes(32).toString("base64url");
-  const tokenHash = hashToken(token);
-  const expiresAt = new Date(Date.now() + sessionTTL);
-
-  if (dbPool) {
-    await dbPool.query("insert into auth_sessions (token_hash, user_id, expires_at) values ($1, $2, $3)", [
-      tokenHash,
-      userID,
-      expiresAt,
-    ]);
-  } else {
-    state.sessions ||= {};
-    state.sessions[tokenHash] = { userID, expiresAt: expiresAt.toISOString() };
-    await saveState();
-  }
-
-  return token;
-}
-
-async function requireUserID(request) {
-  const session = await optionalSession(request);
-  if (session) return session.userID;
-  if (!dbPool) return request.headers["x-eve-user-id"]?.toString() || localUserID;
-  throw httpError(401, "authentication required");
-}
-
-async function optionalSession(request) {
-  const token = bearerToken(request);
-  if (!token) return null;
-  const tokenHash = hashToken(token);
-
-  if (dbPool) {
-    const result = await dbPool.query(
-      "select user_id, expires_at from auth_sessions where token_hash = $1 and expires_at > now()",
-      [tokenHash],
-    );
-    const row = result.rows[0];
-    return row ? { userID: row.user_id, tokenHash } : null;
-  }
-
-  const session = state.sessions?.[tokenHash];
-  if (!session || new Date(session.expiresAt).getTime() <= Date.now()) return null;
-  return { userID: session.userID, tokenHash };
-}
-
-async function revokeSession(tokenHash) {
-  if (dbPool) {
-    await dbPool.query("delete from auth_sessions where token_hash = $1", [tokenHash]);
-    return;
-  }
-  if (state.sessions) {
-    delete state.sessions[tokenHash];
-    await saveState();
-  }
-}
-
-function bearerToken(request) {
-  const header = request.headers.authorization?.toString() || "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  return match?.[1] || "";
-}
-
-function normalizeEmail(value) {
-  const email = String(value || "").trim().toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "";
-}
-
-async function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString("base64url");
-  const hash = await scrypt(password, salt);
-  return `scrypt:${salt}:${hash}`;
-}
-
-async function verifyPassword(password, stored) {
-  const [scheme, salt, expected] = String(stored || "").split(":");
-  if (scheme !== "scrypt" || !salt || !expected) return false;
-  const actual = await scrypt(password, salt);
-  return timingSafeEqual(actual, expected);
-}
-
-function scrypt(password, salt) {
-  return new Promise((resolve, reject) => {
-    crypto.scrypt(password, salt, 64, (error, key) => {
-      if (error) reject(error);
-      else resolve(key.toString("base64url"));
-    });
-  });
-}
-
-function timingSafeEqual(left, right) {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  if (leftBuffer.length !== rightBuffer.length) return false;
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function hashToken(token) {
-  return crypto.createHash("sha256").update(token).digest("base64url");
 }
 
 function integrationMode() {
