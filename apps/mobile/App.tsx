@@ -1,6 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
-import Constants from "expo-constants";
 import { StatusBar } from "expo-status-bar";
 import { Component, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -18,6 +16,8 @@ import {
   View,
 } from "react-native";
 
+import { config } from "./src/config";
+import { apiFetch as apiFetchClient, ApiError, tokenStore } from "./src/api/client";
 import {
   configureNotificationSync,
   isNotificationAccessGranted,
@@ -41,24 +41,19 @@ type Tab = "briefing" | "approvals" | "audit" | "settings";
 type Tone = "green" | "coral" | "neutral";
 type AuthMode = "login" | "signup";
 
-const API_BASE_URL = resolveAPIBaseURL();
-const IS_EXPO_GO = Constants.appOwnership === "expo";
-const LOCAL_USER_ID = "local-user";
-const AUTH_TOKEN_KEY = "eve.authToken";
-const AUTH_BOOT_TIMEOUT_MS = 3000;
-const API_TIMEOUT_MS = 8000;
-const WEB_GOOGLE_RETURN_URL = "http://localhost:8081";
-const GOOGLE_WEB_CLIENT_ID = "458142706595-u27hbqdaa4d9icnhv1gfm3ti3pfekf9h.apps.googleusercontent.com";
-const GOOGLE_SCOPES = [
-  "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/gmail.send",
-  "https://www.googleapis.com/auth/calendar.readonly",
-];
+const API_BASE_URL = config.apiBaseURL;
+const IS_EXPO_GO = config.isExpoGo;
+const LOCAL_USER_ID = config.localUserId;
+const AUTH_BOOT_TIMEOUT_MS = config.auth.bootTimeoutMs;
+const API_TIMEOUT_MS = config.auth.apiTimeoutMs;
+const WEB_GOOGLE_RETURN_URL = config.google.webReturnUrl;
+const GOOGLE_WEB_CLIENT_ID = config.google.webClientId;
+const GOOGLE_SCOPES = config.google.scopes;
 const DEFAULT_PREFERENCES: Preferences = {
   userId: LOCAL_USER_ID,
-  briefingTime: "08:00",
+  briefingTime: config.preferences.defaultBriefingTime,
   pushEnabled: true,
-  timezone: "Africa/Douala",
+  timezone: config.preferences.defaultTimezone,
 };
 const EMPTY_BRIEFING: Briefing = {
   id: "briefing-empty",
@@ -72,23 +67,6 @@ const EMPTY_BRIEFING: Briefing = {
   emails: [],
   calendar: [],
 };
-
-let currentAuthToken: string | null = null;
-
-function resolveAPIBaseURL() {
-  if (process.env.EXPO_PUBLIC_EVE_API_URL) return process.env.EXPO_PUBLIC_EVE_API_URL;
-
-  const debuggerHost =
-    Constants.expoConfig?.hostUri ||
-    Constants.manifest2?.extra?.expoClient?.hostUri ||
-    (Constants.manifest as { debuggerHost?: string } | null)?.debuggerHost;
-  const host = typeof debuggerHost === "string" ? debuggerHost.split(":")[0] : "";
-  if (host && host !== "localhost" && host !== "127.0.0.1") {
-    return `http://${host}:8080`;
-  }
-
-  return "http://127.0.0.1:8080";
-}
 
 type ErrorBoundaryProps = {
   children: ReactNode;
@@ -190,22 +168,21 @@ function EVEApp() {
     let active = true;
     const fallback = setTimeout(() => {
       if (!active) return;
-      currentAuthToken = null;
+      void tokenStore.clear();
       setAuthToken(null);
       setAuthChecked(true);
       setLoading(false);
       setApiError("Could not restore the stored session. Sign in again.");
     }, AUTH_BOOT_TIMEOUT_MS);
 
-    void AsyncStorage.getItem(AUTH_TOKEN_KEY)
+    void tokenStore
+      .hydrate()
       .then((token) => {
         if (!active) return;
-        currentAuthToken = token;
         setAuthToken(token);
       })
       .catch(() => {
         if (!active) return;
-        currentAuthToken = null;
         setAuthToken(null);
         setApiError("Could not restore the stored session. Sign in again.");
       })
@@ -222,7 +199,11 @@ function EVEApp() {
   }, []);
 
   useEffect(() => {
-    currentAuthToken = authToken;
+    if (authToken) {
+      void tokenStore.set(authToken);
+    } else if (tokenStore.current) {
+      void tokenStore.clear();
+    }
   }, [authToken]);
 
   useEffect(() => {
@@ -301,8 +282,7 @@ function EVEApp() {
       const token = tokenFromURL(url);
       if (!token) return false;
 
-      currentAuthToken = token;
-      await AsyncStorage.setItem(AUTH_TOKEN_KEY, token);
+      await tokenStore.set(token);
       setAuthToken(token);
       setApiError(null);
       setLoading(true);
@@ -336,8 +316,7 @@ function EVEApp() {
         },
         null,
       );
-      currentAuthToken = result.token;
-      await AsyncStorage.setItem(AUTH_TOKEN_KEY, result.token);
+      await tokenStore.set(result.token);
       setAuthToken(result.token);
       setSession(normalizeSession(result.session));
       setPreferences(normalizePreferences(result.session.preferences));
@@ -382,8 +361,7 @@ function EVEApp() {
           },
           null,
         );
-        currentAuthToken = result.token;
-        await AsyncStorage.setItem(AUTH_TOKEN_KEY, result.token);
+        await tokenStore.set(result.token);
         const safeSession = normalizeSession(result.session);
         setAuthToken(result.token);
         setSession(safeSession);
@@ -418,8 +396,7 @@ function EVEApp() {
       await apiFetch<{ ok: boolean }>("/v1/auth/logout", { method: "POST" });
     } catch {
     } finally {
-      currentAuthToken = null;
-      await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
+      await tokenStore.clear();
       setAuthToken(null);
       setSession(null);
       setApiError(null);
@@ -942,35 +919,19 @@ function EVEApp() {
   );
 }
 
-async function apiFetch<T>(path: string, init: RequestInit = {}, token = currentAuthToken): Promise<T> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-
-  let response: Response;
+async function apiFetch<T>(
+  path: string,
+  init: RequestInit = {},
+  token = tokenStore.current,
+): Promise<T> {
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...init.headers,
-      },
-    });
+    return await apiFetchClient<T>(path, init, token);
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
+    if (error instanceof ApiError && error.status === 0) {
       throw new Error(`API timed out at ${API_BASE_URL}. Use your computer LAN URL on a physical phone.`);
     }
     throw error;
-  } finally {
-    clearTimeout(timeout);
   }
-
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload.error || `API request failed: ${response.status}`);
-  }
-  return payload as T;
 }
 
 function Permission(props: { icon: keyof typeof Ionicons.glyphMap; title: string; body: string }) {
