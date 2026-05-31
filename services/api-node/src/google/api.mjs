@@ -20,10 +20,7 @@ export async function refreshGoogleToken(user) {
     return user.googleTokens.access_token;
   }
 
-  const clientID =
-    user.googleTokens.client_id ||
-    config.google?.clientId ||
-    config.google?.androidClientId;
+  const clientID = user.googleTokens.client_id || config.google?.clientId || config.google?.androidClientId;
   if (!clientID) return user.googleTokens.access_token;
 
   const body = new URLSearchParams({
@@ -70,9 +67,14 @@ export async function fetchGmailMessages(user, now) {
 
   const list = await googleJSON(listURL, accessToken);
   const messages = await Promise.all(
-    (list.messages || []).slice(0, 10).map((/** @type {any} */ item) =>
-      googleJSON(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${item.id}?format=full`, accessToken),
-    ),
+    (list.messages || [])
+      .slice(0, 10)
+      .map((/** @type {any} */ item) =>
+        googleJSON(
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${item.id}?format=full`,
+          accessToken,
+        ),
+      ),
   );
 
   return messages.map((/** @type {any} */ message) => {

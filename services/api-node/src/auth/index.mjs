@@ -8,13 +8,7 @@
 import crypto from "node:crypto";
 import { config } from "../config.mjs";
 import { httpError } from "../http/responses.mjs";
-import {
-  ensureUserIn,
-  getPool,
-  LOCAL_USER_ID,
-  save,
-  state,
-} from "../storage/index.mjs";
+import { ensureUserIn, getPool, LOCAL_USER_ID, save, state } from "../storage/index.mjs";
 import { hashPassword, hashToken, normalizeEmail, verifyPassword } from "./password.mjs";
 
 /**
@@ -100,10 +94,7 @@ export async function login(input) {
 export async function findAuthUserByEmail(email) {
   const pool = getPool();
   if (pool) {
-    const result = await pool.query(
-      "select id, email, password_hash from users where email = $1",
-      [email],
-    );
+    const result = await pool.query("select id, email, password_hash from users where email = $1", [email]);
     const row = result.rows[0];
     return row ? { id: row.id, email: row.email, passwordHash: row.password_hash } : null;
   }
@@ -175,10 +166,11 @@ export async function createSession(userID) {
   const pool = getPool();
 
   if (pool) {
-    await pool.query(
-      "insert into auth_sessions (token_hash, user_id, expires_at) values ($1, $2, $3)",
-      [tokenHash, userID, expiresAt],
-    );
+    await pool.query("insert into auth_sessions (token_hash, user_id, expires_at) values ($1, $2, $3)", [
+      tokenHash,
+      userID,
+      expiresAt,
+    ]);
   } else {
     state.sessions ||= {};
     state.sessions[tokenHash] = { userID, expiresAt: expiresAt.toISOString() };

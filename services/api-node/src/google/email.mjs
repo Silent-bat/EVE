@@ -72,12 +72,18 @@ function formatAddress(name, email) {
  * @param {string} value
  */
 function sanitizeHeader(value) {
-  return String(value || "").replace(/[\r\n]+/g, " ").trim();
+  return String(value || "")
+    .replace(/[\r\n]+/g, " ")
+    .trim();
 }
 
 /**
  * @param {string} value
  */
 export function encodeBase64URL(value) {
-  return Buffer.from(value, "utf8").toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+  return Buffer.from(value, "utf8")
+    .toString("base64")
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/g, "");
 }

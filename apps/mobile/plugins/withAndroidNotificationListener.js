@@ -50,7 +50,11 @@ function withAndroidNotificationListener(config) {
     if (!application) return manifestConfig;
 
     application.service = application.service || [];
-    if (!application.service.some((service) => service.$?.["android:name"] === ".EveNotificationListenerService")) {
+    if (
+      !application.service.some(
+        (service) => service.$?.["android:name"] === ".EveNotificationListenerService",
+      )
+    ) {
       application.service.push({
         $: {
           "android:name": ".EveNotificationListenerService",
@@ -269,4 +273,8 @@ class EveNotificationListenerService : NotificationListenerService() {
 `;
 }
 
-module.exports = createRunOncePlugin(withAndroidNotificationListener, "withAndroidNotificationListener", "1.0.0");
+module.exports = createRunOncePlugin(
+  withAndroidNotificationListener,
+  "withAndroidNotificationListener",
+  "1.0.0",
+);

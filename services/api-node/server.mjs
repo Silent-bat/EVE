@@ -8,13 +8,7 @@ import {
   logRequest,
   writeErrorResponse,
 } from "./src/http/middleware.mjs";
-import {
-  httpError,
-  readJSON,
-  writeAuthRedirect,
-  writeHTML,
-  writeJSON,
-} from "./src/http/responses.mjs";
+import { httpError, readJSON, writeAuthRedirect, writeHTML, writeJSON } from "./src/http/responses.mjs";
 import { dayKey } from "./src/utils/dates.mjs";
 import {
   close as closeStorage,
@@ -25,10 +19,7 @@ import {
   state,
   storageInfo,
 } from "./src/storage/index.mjs";
-import {
-  normalizePreferences,
-  sessionPayload as buildSessionPayload,
-} from "./src/storage/state.mjs";
+import { normalizePreferences, sessionPayload as buildSessionPayload } from "./src/storage/state.mjs";
 import {
   createSession,
   ensureGoogleAuthUser,
@@ -50,10 +41,7 @@ import {
 import { askAssistant } from "./src/briefing/assistant.mjs";
 import { actOnDraft } from "./src/briefing/drafts.mjs";
 import { generateBriefing, runDueBriefings } from "./src/briefing/generate.mjs";
-import {
-  getDeviceNotifications,
-  recordDeviceNotification,
-} from "./src/notifications/index.mjs";
+import { getDeviceNotifications, recordDeviceNotification } from "./src/notifications/index.mjs";
 
 const log = moduleLogger("server");
 const VERSION = "0.2.0";

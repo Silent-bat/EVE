@@ -55,7 +55,10 @@ export async function generateBriefing(userID, now) {
       id: event.id,
       title: event.title,
       startsAt: atTime(now, event.startHour, event.startMinute).toISOString(),
-      endsAt: addMinutes(atTime(now, event.startHour, event.startMinute), event.durationMinutes).toISOString(),
+      endsAt: addMinutes(
+        atTime(now, event.startHour, event.startMinute),
+        event.durationMinutes,
+      ).toISOString(),
       location: event.location,
     })),
   };

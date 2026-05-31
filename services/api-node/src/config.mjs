@@ -12,24 +12,36 @@ const envSchema = z
 
     DATABASE_URL: z.string().url().optional(),
 
-    GOOGLE_CLIENT_ID: z.string().optional().transform((v) => v || undefined),
-    GOOGLE_CLIENT_SECRET: z.string().optional().transform((v) => v || undefined),
-    GOOGLE_ANDROID_CLIENT_ID: z.string().optional().transform((v) => v || undefined),
+    GOOGLE_CLIENT_ID: z
+      .string()
+      .optional()
+      .transform((v) => v || undefined),
+    GOOGLE_CLIENT_SECRET: z
+      .string()
+      .optional()
+      .transform((v) => v || undefined),
+    GOOGLE_ANDROID_CLIENT_ID: z
+      .string()
+      .optional()
+      .transform((v) => v || undefined),
     GOOGLE_REDIRECT_URI: z.string().url().optional(),
 
-    GEMINI_API_KEY: z.string().optional().transform((v) => v || undefined),
-    ANTHROPIC_API_KEY: z.string().optional().transform((v) => v || undefined),
+    GEMINI_API_KEY: z
+      .string()
+      .optional()
+      .transform((v) => v || undefined),
+    ANTHROPIC_API_KEY: z
+      .string()
+      .optional()
+      .transform((v) => v || undefined),
 
     AUTH_RATELIMIT_IP_PER_MIN: z.coerce.number().int().positive().default(5),
     AUTH_RATELIMIT_EMAIL_PER_15MIN: z.coerce.number().int().positive().default(20),
   })
-  .refine(
-    (v) => !v.GOOGLE_CLIENT_ID || (v.GOOGLE_CLIENT_SECRET && v.GOOGLE_REDIRECT_URI),
-    {
-      message: "GOOGLE_CLIENT_ID is set but GOOGLE_CLIENT_SECRET or GOOGLE_REDIRECT_URI is missing",
-      path: ["GOOGLE_CLIENT_SECRET"],
-    },
-  );
+  .refine((v) => !v.GOOGLE_CLIENT_ID || (v.GOOGLE_CLIENT_SECRET && v.GOOGLE_REDIRECT_URI), {
+    message: "GOOGLE_CLIENT_ID is set but GOOGLE_CLIENT_SECRET or GOOGLE_REDIRECT_URI is missing",
+    path: ["GOOGLE_CLIENT_SECRET"],
+  });
 
 const parsed = envSchema.safeParse(process.env);
 if (!parsed.success) {

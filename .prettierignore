@@ -1,0 +1,15 @@
+node_modules
+pnpm-lock.yaml
+.eve-data
+.expo
+dist
+build
+android
+ios
+*.min.js
+*.bundle.js
+.npm-cache
+.idea
+.claude
+briefos_final_prd.html
+apps/preview

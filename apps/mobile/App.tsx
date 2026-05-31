@@ -45,7 +45,6 @@ const API_BASE_URL = config.apiBaseURL;
 const IS_EXPO_GO = config.isExpoGo;
 const LOCAL_USER_ID = config.localUserId;
 const AUTH_BOOT_TIMEOUT_MS = config.auth.bootTimeoutMs;
-const API_TIMEOUT_MS = config.auth.apiTimeoutMs;
 const WEB_GOOGLE_RETURN_URL = config.google.webReturnUrl;
 const GOOGLE_WEB_CLIENT_ID = config.google.webClientId;
 const GOOGLE_SCOPES = config.google.scopes;
@@ -94,7 +93,9 @@ class AppErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState>
             <Text style={styles.markText}>E</Text>
           </View>
           <Text style={styles.connectTitle}>EVE hit an app error.</Text>
-          <Text style={styles.connectCopy}>{this.state.error.message || "Reload the app and try again."}</Text>
+          <Text style={styles.connectCopy}>
+            {this.state.error.message || "Reload the app and try again."}
+          </Text>
           <Text style={styles.debugText}>API: {API_BASE_URL}</Text>
         </View>
       </SafeAreaView>
@@ -245,7 +246,10 @@ function EVEApp() {
       setNotificationAccessEnabled(Boolean(event.enabled));
     });
     const unsubscribeNotifications = subscribeToDeviceNotifications((event) => {
-      const postedAt = typeof event.postedAt === "number" ? new Date(event.postedAt).toISOString() : new Date().toISOString();
+      const postedAt =
+        typeof event.postedAt === "number"
+          ? new Date(event.postedAt).toISOString()
+          : new Date().toISOString();
       const payload = {
         id: event.id,
         packageName: event.packageName,
@@ -259,8 +263,14 @@ function EVEApp() {
         method: "POST",
         body: JSON.stringify(payload),
       })
-        .then((saved) => setDeviceNotifications((current) => [saved, ...current.filter((item) => item.id !== saved.id)].slice(0, 30)))
-        .catch((error) => setApiError(error instanceof Error ? error.message : "Could not sync notification"));
+        .then((saved) =>
+          setDeviceNotifications((current) =>
+            [saved, ...current.filter((item) => item.id !== saved.id)].slice(0, 30),
+          ),
+        )
+        .catch((error) =>
+          setApiError(error instanceof Error ? error.message : "Could not sync notification"),
+        );
     });
 
     return () => {
@@ -274,22 +284,18 @@ function EVEApp() {
     [briefing.emails],
   );
 
-  const selectedEmail =
-    briefing.emails.find((email) => email.id === selectedEmailId) ?? briefing.emails[0];
+  const selectedEmail = briefing.emails.find((email) => email.id === selectedEmailId) ?? briefing.emails[0];
 
-  const finishGoogleLogin = useCallback(
-    async (url: string) => {
-      const token = tokenFromURL(url);
-      if (!token) return false;
+  const finishGoogleLogin = useCallback(async (url: string) => {
+    const token = tokenFromURL(url);
+    if (!token) return false;
 
-      await tokenStore.set(token);
-      setAuthToken(token);
-      setApiError(null);
-      setLoading(true);
-      return true;
-    },
-    [],
-  );
+    await tokenStore.set(token);
+    setAuthToken(token);
+    setApiError(null);
+    setLoading(true);
+    return true;
+  }, []);
 
   useEffect(() => {
     void Linking.getInitialURL().then((url) => {
@@ -536,21 +542,29 @@ function EVEApp() {
           <View style={styles.mark}>
             <Text style={styles.markText}>E</Text>
           </View>
-          <Text style={styles.connectTitle}>{authMode === "signup" ? "Create your EVE account." : "Welcome back to EVE."}</Text>
-          <Text style={styles.connectCopy}>Sign in to sync your briefings, audit trail, and Android notification captures.</Text>
+          <Text style={styles.connectTitle}>
+            {authMode === "signup" ? "Create your EVE account." : "Welcome back to EVE."}
+          </Text>
+          <Text style={styles.connectCopy}>
+            Sign in to sync your briefings, audit trail, and Android notification captures.
+          </Text>
 
           <View style={styles.authSwitch}>
             <Pressable
               style={[styles.authSwitchButton, authMode === "signup" && styles.activeAuthSwitch]}
               onPress={() => setAuthMode("signup")}
             >
-              <Text style={[styles.authSwitchText, authMode === "signup" && styles.activeAuthSwitchText]}>Sign up</Text>
+              <Text style={[styles.authSwitchText, authMode === "signup" && styles.activeAuthSwitchText]}>
+                Sign up
+              </Text>
             </Pressable>
             <Pressable
               style={[styles.authSwitchButton, authMode === "login" && styles.activeAuthSwitch]}
               onPress={() => setAuthMode("login")}
             >
-              <Text style={[styles.authSwitchText, authMode === "login" && styles.activeAuthSwitchText]}>Log in</Text>
+              <Text style={[styles.authSwitchText, authMode === "login" && styles.activeAuthSwitchText]}>
+                Log in
+              </Text>
             </Pressable>
           </View>
 
@@ -575,7 +589,9 @@ function EVEApp() {
 
           <Pressable style={styles.primaryButton} onPress={submitAuth} disabled={saving}>
             <Ionicons name="arrow-forward" size={18} color="#fffdf8" />
-            <Text style={styles.primaryButtonText}>{saving ? "Please wait" : authMode === "signup" ? "Create account" : "Log in"}</Text>
+            <Text style={styles.primaryButtonText}>
+              {saving ? "Please wait" : authMode === "signup" ? "Create account" : "Log in"}
+            </Text>
           </Pressable>
 
           <Pressable style={styles.googleButton} onPress={loginWithGoogle} disabled={saving}>
@@ -597,8 +613,7 @@ function EVEApp() {
           </View>
           <Text style={styles.connectTitle}>Your morning brief, ready before work.</Text>
           <Text style={styles.connectCopy}>
-            Connect Google to prepare priority emails, today's meetings, and drafted replies
-            for approval.
+            Connect Google to prepare priority emails, today's meetings, and drafted replies for approval.
           </Text>
 
           <Permission icon="mail-outline" title="Gmail" body="Read recent messages and prepare drafts." />
@@ -643,7 +658,9 @@ function EVEApp() {
             </View>
             <View>
               <Text style={styles.appName}>EVE</Text>
-              <Text style={styles.headerMeta}>{session.email || "Account"} - briefing at {preferences.briefingTime}</Text>
+              <Text style={styles.headerMeta}>
+                {session.email || "Account"} - briefing at {preferences.briefingTime}
+              </Text>
             </View>
           </View>
           <View style={styles.pendingPill}>
@@ -679,7 +696,10 @@ function EVEApp() {
             onSubmitEditing={askAssistant}
           />
           <Pressable
-            style={[styles.promptButton, (!assistantPrompt.trim() || assistantLoading) && styles.disabledButton]}
+            style={[
+              styles.promptButton,
+              (!assistantPrompt.trim() || assistantLoading) && styles.disabledButton,
+            ]}
             onPress={askAssistant}
             disabled={!assistantPrompt.trim() || assistantLoading}
           >
@@ -755,12 +775,7 @@ function EVEApp() {
             <View style={styles.draftPanel}>
               <SectionHeader title="Draft reply" note={selectedEmail.senderName} />
               {editingEmailId === selectedEmail.id ? (
-                <TextInput
-                  multiline
-                  value={draftValue}
-                  onChangeText={setDraftValue}
-                  style={styles.editor}
-                />
+                <TextInput multiline value={draftValue} onChangeText={setDraftValue} style={styles.editor} />
               ) : (
                 <Text style={styles.draftText}>{selectedEmail.draftReply}</Text>
               )}
@@ -893,7 +908,9 @@ function EVEApp() {
               </View>
               {notificationAccessSupported ? (
                 <Pressable style={styles.inlineButton} onPress={openNotificationAccessSettings}>
-                  <Text style={styles.inlineButtonText}>{notificationAccessEnabled ? "Settings" : "Enable"}</Text>
+                  <Text style={styles.inlineButtonText}>
+                    {notificationAccessEnabled ? "Settings" : "Enable"}
+                  </Text>
                 </Pressable>
               ) : null}
             </View>
@@ -919,11 +936,7 @@ function EVEApp() {
   );
 }
 
-async function apiFetch<T>(
-  path: string,
-  init: RequestInit = {},
-  token = tokenStore.current,
-): Promise<T> {
+async function apiFetch<T>(path: string, init: RequestInit = {}, token = tokenStore.current): Promise<T> {
   try {
     return await apiFetchClient<T>(path, init, token);
   } catch (error) {
@@ -966,10 +979,7 @@ function SectionHeader(props: { title: string; note: string }) {
 
 function EmailCard(props: { email: BriefingEmail; selected: boolean; onPress: () => void }) {
   return (
-    <Pressable
-      style={[styles.emailCard, props.selected && styles.selectedEmailCard]}
-      onPress={props.onPress}
-    >
+    <Pressable style={[styles.emailCard, props.selected && styles.selectedEmailCard]} onPress={props.onPress}>
       <View style={styles.emailTopline}>
         <View style={styles.senderRow}>
           <View style={styles.avatar}>
@@ -1090,7 +1100,8 @@ function normalizePreferences(input: Partial<Preferences> | null | undefined): P
     ...(input || {}),
     userId: input?.userId || DEFAULT_PREFERENCES.userId,
     briefingTime: input?.briefingTime || DEFAULT_PREFERENCES.briefingTime,
-    pushEnabled: typeof input?.pushEnabled === "boolean" ? input.pushEnabled : DEFAULT_PREFERENCES.pushEnabled,
+    pushEnabled:
+      typeof input?.pushEnabled === "boolean" ? input.pushEnabled : DEFAULT_PREFERENCES.pushEnabled,
     timezone: input?.timezone || DEFAULT_PREFERENCES.timezone,
   };
 }

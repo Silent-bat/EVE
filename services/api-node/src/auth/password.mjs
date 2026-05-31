@@ -5,7 +5,9 @@ import crypto from "node:crypto";
  * @returns {string} normalized lowercase email or "" if not a syntactically valid address
  */
 export function normalizeEmail(value) {
-  const email = String(value || "").trim().toLowerCase();
+  const email = String(value || "")
+    .trim()
+    .toLowerCase();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "";
 }
 

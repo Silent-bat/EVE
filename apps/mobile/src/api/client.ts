@@ -96,9 +96,10 @@ export async function apiFetch<T>(
     const text = await response.text();
     const payload = text ? safeJSONParse(text) : null;
     if (!response.ok) {
-      const errField = payload && typeof payload === "object" && "error" in payload
-        ? (payload as { error?: unknown }).error
-        : undefined;
+      const errField =
+        payload && typeof payload === "object" && "error" in payload
+          ? (payload as { error?: unknown }).error
+          : undefined;
       const message = typeof errField === "string" ? errField : `request failed (${response.status})`;
       throw new ApiError(response.status, message);
     }
