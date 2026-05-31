@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "EVE",
+    "slug": "eve",
+    "version": "0.1.0",
+    "entryPoint": "./index.ts",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "eve",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.eve.agent"
+    },
+    "android": {
+      "package": "com.eve.agent"
+    },
+    "plugins": [
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.458142706595-u27hbqdaa4d9icnhv1gfm3ti3pfekf9h"
+        }
+      ],
+      "./plugins/withAndroidNotificationListener"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "84e01128-754f-4319-9d81-7ca5ac73da67"
+      }
+    },
+    "owner": "lepainbeurre"
+  }
+}

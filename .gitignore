@@ -1,0 +1,13 @@
+.DS_Store
+.idea/
+.env
+.env.*
+!.env.example
+.eve-data/
+*.log
+node_modules/
+.npm-cache/
+.expo/
+dist/
+coverage/
+tmp/

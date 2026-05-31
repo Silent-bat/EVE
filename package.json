@@ -1,0 +1,22 @@
+{
+  "name": "eve",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EVE / BriefOS personal agent workspace",
+  "packageManager": "pnpm@10.13.1",
+  "workspaces": [
+    "apps/mobile"
+  ],
+  "scripts": {
+    "api:start": "node services/api-node/server.mjs",
+    "mobile:start": "pnpm --filter @eve/mobile start",
+    "mobile:typecheck": "pnpm --filter @eve/mobile typecheck",
+    "v1:start": "pnpm api:start",
+    "preview": "node apps/preview/server.mjs",
+    "check": "node --check apps/preview/app.js && node --check apps/preview/server.mjs"
+  },
+  "dependencies": {
+    "eas-cli": "^20.0.0",
+    "pg": "^8.21.0"
+  }
+}
