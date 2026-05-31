@@ -1,8 +1,5 @@
 import crypto from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import http from "node:http";
-import path from "node:path";
-import pg from "pg";
 
 import { config } from "./src/config.mjs";
 import { logger, moduleLogger } from "./src/logger.mjs";
@@ -20,25 +17,52 @@ import {
   writeHTML,
   writeJSON,
 } from "./src/http/responses.mjs";
+import {
+  addMinutes,
+  atTime,
+  dayKey,
+  timeKey,
+} from "./src/utils/dates.mjs";
+import {
+  close as closeStorage,
+  ensureUserIn,
+  getPool,
+  initialize as initializeStorage,
+  isDatabaseConnected,
+  LOCAL_USER_ID,
+  save as saveStateToStorage,
+  state,
+  storageInfo,
+} from "./src/storage/index.mjs";
+import {
+  normalizePreferences,
+  sessionPayload as buildSessionPayload,
+  statePayload,
+  validTime,
+} from "./src/storage/state.mjs";
 
 const log = moduleLogger("server");
 const host = config.host;
 const port = config.port;
-const dataDir = config.dataDir;
-const statePath = config.statePath;
-const localUserID = "local-user";
+const localUserID = LOCAL_USER_ID;
 const sessionTTL = config.authTokenTTLMs;
-const dbPool = config.databaseUrl
-  ? new pg.Pool({
-      connectionString: config.databaseUrl,
-      ssl: { rejectUnauthorized: false },
-    })
-  : null;
 
 const startedAt = Date.now();
 
-await initDatabase();
-let state = await loadState();
+await initializeStorage();
+const dbPool = getPool();
+
+function ensureUser(userID) {
+  ensureUserIn(state, userID);
+}
+
+async function saveState() {
+  await saveStateToStorage();
+}
+
+function sessionPayload(userID) {
+  return buildSessionPayload(state, userID, integrationMode());
+}
 
 const server = http.createServer(async (request, response) => {
   applySecurityHeaders(response);
@@ -55,8 +79,8 @@ const server = http.createServer(async (request, response) => {
         version: "0.2.0",
         uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
         mode: integrationMode(),
-        storage: dbPool ? "postgres+json" : "json",
-        databaseConnected: dbPool ? await pingDatabase() : false,
+        storage: storageInfo(),
+        databaseConnected: await isDatabaseConnected(),
       });
       return;
     }
@@ -236,8 +260,9 @@ function shutdown(signal) {
   clearInterval(briefingInterval);
   server.close((err) => {
     if (err) log.error({ err }, "server close error");
-    if (dbPool) dbPool.end().catch((err) => log.error({ err }, "db pool close error"));
-    process.exit(err ? 1 : 0);
+    closeStorage().catch((err) => log.error({ err }, "storage close error")).finally(() => {
+      process.exit(err ? 1 : 0);
+    });
   });
   setTimeout(() => process.exit(1), 10_000).unref();
 }
@@ -251,197 +276,6 @@ process.on("unhandledRejection", (err) => {
   logger.fatal({ err }, "unhandledRejection");
   process.exit(1);
 });
-
-async function pingDatabase() {
-  if (!dbPool) return false;
-  try {
-    await dbPool.query("SELECT 1");
-    return true;
-  } catch (error) {
-    log.warn({ err: error }, "database ping failed");
-    return false;
-  }
-}
-
-async function initDatabase() {
-  if (!dbPool) return;
-
-  await dbPool.query(`
-    create table if not exists users (
-      id text primary key,
-      email text unique not null,
-      password_hash text not null,
-      created_at timestamptz not null default now()
-    );
-
-    create table if not exists auth_sessions (
-      token_hash text primary key,
-      user_id text not null references users(id) on delete cascade,
-      expires_at timestamptz not null,
-      created_at timestamptz not null default now()
-    );
-
-    create table if not exists app_state (
-      user_id text primary key references users(id) on delete cascade,
-      payload jsonb not null,
-      updated_at timestamptz not null default now()
-    );
-
-    create table if not exists device_notifications (
-      id text primary key,
-      user_id text not null references users(id) on delete cascade,
-      package_name text not null,
-      app_name text,
-      title text,
-      body text,
-      posted_at timestamptz not null,
-      received_at timestamptz not null default now(),
-      raw jsonb not null default '{}'::jsonb
-    );
-
-    create index if not exists device_notifications_user_received_idx
-      on device_notifications (user_id, received_at desc);
-  `);
-}
-
-async function loadState() {
-  if (dbPool) {
-    const seeded = { users: {}, briefings: {}, audit: {}, deviceNotifications: {} };
-    const appStateRows = await dbPool.query("select user_id, payload from app_state");
-    for (const row of appStateRows.rows) {
-      mergePersistedUser(seeded, row.user_id, row.payload || {});
-    }
-    const userRows = await dbPool.query("select id, email from users");
-    for (const row of userRows.rows) {
-      ensureUserIn(seeded, row.id);
-      seeded.users[row.id].email = row.email;
-    }
-    const notificationRows = await dbPool.query(
-      `select id, user_id, package_name, app_name, title, body, posted_at, received_at, raw
-       from device_notifications
-       order by received_at desc
-       limit 500`,
-    );
-    for (const row of notificationRows.rows) {
-      seeded.deviceNotifications[row.user_id] ||= [];
-      seeded.deviceNotifications[row.user_id].push({
-        id: row.id,
-        userId: row.user_id,
-        packageName: row.package_name,
-        appName: row.app_name || "",
-        title: row.title || "",
-        body: row.body || "",
-        postedAt: row.posted_at.toISOString(),
-        receivedAt: row.received_at.toISOString(),
-        raw: row.raw || {},
-      });
-    }
-    return seeded;
-  }
-
-  try {
-    const raw = await readFile(statePath, "utf8");
-    const parsed = JSON.parse(raw);
-    return {
-      users: parsed.users || {},
-      briefings: parsed.briefings || {},
-      audit: parsed.audit || {},
-      deviceNotifications: parsed.deviceNotifications || {},
-      sessions: parsed.sessions || {},
-      oauthStates: parsed.oauthStates || {},
-    };
-  } catch {
-    const seeded = { users: {}, briefings: {}, audit: {}, deviceNotifications: {}, sessions: {}, oauthStates: {} };
-    ensureUserIn(seeded, localUserID);
-    return seeded;
-  }
-}
-
-async function saveState() {
-  if (dbPool) {
-    await Promise.all(
-      Object.keys(state.users).map((userID) =>
-        dbPool.query(
-          `insert into app_state (user_id, payload, updated_at)
-           values ($1, $2, now())
-           on conflict (user_id) do update set payload = excluded.payload, updated_at = now()`,
-          [userID, statePayload(userID)],
-        ),
-      ),
-    );
-    return;
-  }
-
-  await mkdir(dataDir, { recursive: true });
-  await writeFile(statePath, JSON.stringify(state, null, 2));
-}
-
-function ensureUser(userID) {
-  ensureUserIn(state, userID);
-}
-
-function ensureUserIn(target, userID) {
-  target.users[userID] ||= {
-    id: userID,
-    email: undefined,
-    googleConnected: false,
-    connectionMode: "none",
-    preferences: normalizePreferences({ userId: userID }),
-  };
-  target.briefings[userID] ||= {};
-  target.audit[userID] ||= [];
-  target.deviceNotifications ||= {};
-  target.deviceNotifications[userID] ||= [];
-}
-
-function mergePersistedUser(target, userID, payload) {
-  ensureUserIn(target, userID);
-  const user = payload.user || {};
-  target.users[userID] = {
-    ...target.users[userID],
-    ...user,
-    id: userID,
-  };
-  target.briefings[userID] = payload.briefings || {};
-  target.audit[userID] = payload.audit || [];
-  target.deviceNotifications[userID] = payload.deviceNotifications || [];
-}
-
-function statePayload(userID) {
-  const { passwordHash, ...safeUser } = state.users[userID] || {};
-  return {
-    user: safeUser,
-    briefings: state.briefings[userID] || {},
-    audit: state.audit[userID] || [],
-    deviceNotifications: state.deviceNotifications?.[userID] || [],
-  };
-}
-
-function normalizePreferences(input) {
-  return {
-    userId: input.userId || localUserID,
-    briefingTime: validTime(input.briefingTime) ? input.briefingTime : "08:00",
-    pushEnabled: typeof input.pushEnabled === "boolean" ? input.pushEnabled : true,
-    timezone: input.timezone || "Africa/Douala",
-  };
-}
-
-function validTime(value) {
-  return typeof value === "string" && /^\d{2}:\d{2}$/.test(value);
-}
-
-function sessionPayload(userID) {
-  ensureUser(userID);
-  const user = state.users[userID];
-  return {
-    userId: userID,
-    email: user.email || null,
-    googleConnected: user.googleConnected,
-    connectionMode: user.connectionMode,
-    integrationMode: integrationMode(),
-    preferences: user.preferences,
-  };
-}
 
 async function signup(input) {
   const email = normalizeEmail(input.email);
@@ -1480,21 +1314,4 @@ function decodeBase64URL(value) {
     .trim();
 }
 
-function atTime(date, hour, minute) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, minute, 0, 0);
-}
 
-function addMinutes(date, minutes) {
-  return new Date(date.getTime() + minutes * 60 * 1000);
-}
-
-function dayKey(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function timeKey(date) {
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-}
