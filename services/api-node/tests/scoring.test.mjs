@@ -90,7 +90,10 @@ test("normalizeMessageAnalysis clamps urgencyScore to [1, 99]", () => {
   const fallback = { urgencyScore: 50, urgencyReason: "x", summary: "y", draftReply: "z" };
   assert.equal(normalizeMessageAnalysis({ urgencyScore: 999 }, fallback).urgencyScore, 99);
   assert.equal(normalizeMessageAnalysis({ urgencyScore: -10 }, fallback).urgencyScore, 1);
-  assert.equal(normalizeMessageAnalysis({ urgencyScore: "not a number" }, fallback).urgencyScore, 50);
+  assert.equal(
+    normalizeMessageAnalysis(/** @type {any} */ ({ urgencyScore: "not a number" }), fallback).urgencyScore,
+    50,
+  );
 });
 
 test("sanitizePlainText collapses whitespace and clamps length", () => {

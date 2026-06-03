@@ -13,3 +13,7 @@ ios
 .claude
 briefos_final_prd.html
 apps/preview
+.env
+.env.*
+!.env.example.md
+CLAUDE.md
