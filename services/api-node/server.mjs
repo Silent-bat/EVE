@@ -41,6 +41,7 @@ import {
 import { askAssistant } from "./src/briefing/assistant.mjs";
 import { actOnDraft } from "./src/briefing/drafts.mjs";
 import { generateBriefing, runDueBriefings } from "./src/briefing/generate.mjs";
+import { startGmailPollerLoop, sweepGmailPollers } from "./src/briefing/gmail-poller.mjs";
 import { getDeviceNotifications, recordDeviceNotification } from "./src/notifications/index.mjs";
 
 const log = moduleLogger("server");
@@ -288,6 +289,19 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/gmail/poll") {
+      ensureUser(userID);
+      const user = state.users[userID];
+      user.gmailPoll ||= {};
+      user.gmailPoll.lastPollAt = null; // force this user due
+      await sweepGmailPollers({ force: true });
+      writeJSON(response, 200, {
+        gmailPoll: user.gmailPoll,
+        lastNotification: state.deviceNotifications?.[userID]?.[0] ?? null,
+      });
+      return;
+    }
+
     writeJSON(response, 404, { error: "not found" });
   } catch (error) {
     writeErrorResponse(error, request, response);
@@ -311,10 +325,13 @@ const briefingInterval = setInterval(() => {
   });
 }, 60_000);
 
+const gmailPollerInterval = startGmailPollerLoop();
+
 /** @param {string} signal */
 function shutdown(signal) {
   log.info({ signal }, "shutting down");
   clearInterval(briefingInterval);
+  clearInterval(gmailPollerInterval);
   server.close((err) => {
     if (err) log.error({ err }, "server close error");
     closeStorage()

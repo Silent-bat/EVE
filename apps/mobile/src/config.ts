@@ -32,7 +32,7 @@ export const config = Object.freeze({
   auth: {
     storageKey: "eve.authToken",
     bootTimeoutMs: 3000,
-    apiTimeoutMs: 8000,
+    apiTimeoutMs: 25000,
   },
   google: {
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || DEFAULT_GOOGLE_WEB_CLIENT_ID,
