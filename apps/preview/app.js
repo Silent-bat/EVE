@@ -172,6 +172,7 @@ function render() {
     <div class="screen">
       ${renderTopbar()}
       <section class="content">
+        ${state.tab === "inbox" ? renderInbox() : ""}
         ${state.tab === "briefing" ? renderBriefing() : ""}
         ${state.tab === "approvals" ? renderApprovals() : ""}
         ${state.tab === "audit" ? renderAudit() : ""}
@@ -238,6 +239,7 @@ function renderTopbar() {
         <span class="status-pill"><span class="status-dot"></span>${pendingEmails().length} pending</span>
       </div>
       <nav class="tabs" aria-label="Primary">
+        ${renderTab("inbox", "Inbox")}
         ${renderTab("briefing", "Briefing")}
         ${renderTab("approvals", "Approve")}
         ${renderTab("audit", "Audit")}
@@ -250,6 +252,56 @@ function renderTopbar() {
 function renderTab(tab, label) {
   const active = state.tab === tab ? " active" : "";
   return `<button class="tab${active}" data-tab="${tab}">${label}</button>`;
+}
+
+function renderInbox() {
+  const thoughts = [
+    {
+      id: "th-1",
+      category: "urgent_email",
+      title: "Investor update call moved",
+      body: "Maya Chen requested to move today's 11:30 call. Draft reply prepared for review.",
+      time: "07:12",
+    },
+    {
+      id: "th-2",
+      category: "interview_prep",
+      title: "Atlas Project onboarding sync",
+      body: "Jordan Lee needs service agreement signed before noon to avoid onboarding delay.",
+      time: "06:48",
+    },
+  ];
+
+  return `
+    <div class="invite-banner" style="display:flex;align-items:center;gap:12px;padding:14px;border-radius:8px;background:var(--blue-soft);margin-bottom:16px;">
+      <div class="icon" style="background:var(--blue);color:#fff;">${icon("bell")}</div>
+      <div style="flex:1;">
+        <div style="font-weight:800;font-size:14px;color:var(--ink);">Interrupt me</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">Open a window where EVE can push proactively. Bounded, scoped, duration-set.</div>
+      </div>
+    </div>
+
+    <div class="section-heading">
+      <h2>Proactive thoughts</h2>
+      <span class="small-note">${thoughts.length} thoughts</span>
+    </div>
+    <div class="email-list">
+      ${thoughts
+        .map(
+          (t) => `
+            <div class="email-card" style="border-left: 3px solid var(--blue);">
+              <div class="email-topline">
+                <div class="sender-name">${t.title}</div>
+                <span class="status approved">${t.category}</span>
+              </div>
+              <div class="email-summary">${t.body}</div>
+              <div class="email-meta">Surfaced at ${t.time}</div>
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
 }
 
 function renderBriefing() {

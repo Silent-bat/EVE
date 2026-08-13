@@ -5,6 +5,9 @@ import { emptyState, ensureUserIn, mergePersistedUser, statePayload } from "./st
 
 const log = moduleLogger("storage.postgres");
 
+// A liveness probe should fail fast rather than inherit the pool's budget.
+const PING_TIMEOUT_MS = 3000;
+
 /** @type {pg.Pool | null} */
 let pool = null;
 
@@ -17,6 +20,24 @@ export function createPool() {
   pool = new pg.Pool({
     connectionString: config.databaseUrl,
     ssl: { rejectUnauthorized: false },
+    // Without these, pg waits forever: a serverless database that drops a
+    // TLS handshake leaves dead clients in the pool and every later acquire
+    // queues behind them, so the whole API stops answering rather than
+    // failing the one request that hit the blip.
+    connectionTimeoutMillis: config.databaseConnectTimeoutMs,
+    statement_timeout: config.databaseStatementTimeoutMs,
+    idleTimeoutMillis: 30000,
+    // save() fans out one query per user, so a small pool lets a single save
+    // starve incoming requests. Neon's pooler endpoint handles this many.
+    max: 20,
+    // Neon closes idle connections on its own; keepalive keeps NAT paths warm
+    // so we notice a dead socket at acquire time instead of mid-query.
+    keepAlive: true,
+  });
+  // An idle client erroring emits on the pool, and an unhandled 'error' event
+  // takes the process down. Log and let pg evict the client.
+  pool.on("error", (error) => {
+    log.warn({ err: error }, "idle database client errored; pool will evict it");
   });
   return pool;
 }
@@ -30,7 +51,14 @@ export async function closePool() {
 export async function pingDatabase() {
   if (!pool) return false;
   try {
-    await pool.query("SELECT 1");
+    // Health has to answer even when the database will not. The pool's own
+    // connect timeout is longer than a probe should ever wait, so race it.
+    await Promise.race([
+      pool.query("SELECT 1"),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("ping timed out")), PING_TIMEOUT_MS).unref(),
+      ),
+    ]);
     return true;
   } catch (error) {
     log.warn({ err: error }, "database ping failed");
@@ -130,14 +158,31 @@ export async function loadFromPostgres() {
 export async function saveToPostgres(state) {
   const activePool = pool;
   if (!activePool) throw new Error("postgres pool not initialized");
-  await Promise.all(
+  // A user can sit in memory without a `users` row — a deleted account, or the
+  // seeded local user. That row alone fails the app_state FK, and under
+  // Promise.all one rejection fails every other user's save with it, so a
+  // single stale entry blocks all writes and therefore all logins. The
+  // `where exists` guard skips those rows instead of taking the save down.
+  const results = await Promise.allSettled(
     Object.keys(state.users).map((userID) =>
       activePool.query(
         `insert into app_state (user_id, payload, updated_at)
-         values ($1, $2, now())
+         select $1, $2, now()
+         where exists (select 1 from users where id = $1)
          on conflict (user_id) do update set payload = excluded.payload, updated_at = now()`,
         [userID, statePayload(state, userID)],
       ),
     ),
   );
+
+  const failed = results.filter((r) => r.status === "rejected");
+  if (failed.length) {
+    log.warn(
+      { failed: failed.length, total: results.length, err: failed[0].reason },
+      "some user states failed to persist",
+    );
+    // Every write failing means the database is unusable, not that one row is
+    // stale — surface that rather than reporting a successful save.
+    if (failed.length === results.length) throw failed[0].reason;
+  }
 }

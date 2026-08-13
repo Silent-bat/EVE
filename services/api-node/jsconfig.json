@@ -13,7 +13,9 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": false,
+    "maxNodeModuleJsDepth": 0,
     "types": ["node"]
   },
-  "include": ["src/**/*.mjs", "tests/**/*.mjs", "server.mjs"]
+  "include": ["src/**/*.mjs", "src/**/*.d.ts", "tests/**/*.mjs", "server.mjs"],
+  "exclude": ["node_modules"]
 }

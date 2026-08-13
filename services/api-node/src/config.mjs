@@ -11,6 +11,11 @@ const envSchema = z
     LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal", "silent"]).default("info"),
 
     DATABASE_URL: z.string().url().optional(),
+    // pg defaults connectionTimeoutMillis to 0, meaning acquires wait forever.
+    // One dropped TLS handshake to a serverless database then wedges every
+    // later request behind dead clients, so keep these bounded.
+    DATABASE_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
+    DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
 
     GOOGLE_CLIENT_ID: z
       .string()
@@ -35,8 +40,26 @@ const envSchema = z
       .optional()
       .transform((v) => v || undefined),
 
+    // Node's fetch has no default timeout, so a stalled Google connection
+    // would hang a login request forever. The mobile client gives up at 25s.
+    OUTBOUND_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+
     AUTH_RATELIMIT_IP_PER_MIN: z.coerce.number().int().positive().default(5),
     AUTH_RATELIMIT_EMAIL_PER_15MIN: z.coerce.number().int().positive().default(20),
+
+    // Bodies are buffered in memory before parsing, so without a ceiling one
+    // large unauthenticated POST can grow the heap until the process dies.
+    MAX_BODY_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
+
+    // Whether X-Forwarded-For may be believed when bucketing rate limits. Off by
+    // default: the header is caller-supplied, so trusting it unconditionally
+    // lets an attacker rotate it and walk straight through the login limiter.
+    // Turn on only behind a proxy that overwrites the header rather than
+    // appending to it.
+    TRUST_PROXY: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
   })
   .refine((v) => !v.GOOGLE_CLIENT_ID || (v.GOOGLE_CLIENT_SECRET && v.GOOGLE_REDIRECT_URI), {
     message: "GOOGLE_CLIENT_ID is set but GOOGLE_CLIENT_SECRET or GOOGLE_REDIRECT_URI is missing",
@@ -59,6 +82,8 @@ export const config = Object.freeze({
   nodeEnv: env.NODE_ENV,
   isProduction: env.NODE_ENV === "production",
   isTest: env.NODE_ENV === "test",
+  trustProxy: env.TRUST_PROXY,
+  maxBodyBytes: env.MAX_BODY_BYTES,
   host: env.API_HOST,
   port: env.API_PORT,
   dataDir: path.isAbsolute(env.EVE_DATA_DIR) ? env.EVE_DATA_DIR : path.join(projectRoot, env.EVE_DATA_DIR),
@@ -68,6 +93,9 @@ export const config = Object.freeze({
   authTokenTTLMs: env.AUTH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000,
   logLevel: env.LOG_LEVEL,
   databaseUrl: env.DATABASE_URL,
+  outboundTimeoutMs: env.OUTBOUND_TIMEOUT_MS,
+  databaseConnectTimeoutMs: env.DATABASE_CONNECT_TIMEOUT_MS,
+  databaseStatementTimeoutMs: env.DATABASE_STATEMENT_TIMEOUT_MS,
   google: env.GOOGLE_CLIENT_ID
     ? {
         clientId: env.GOOGLE_CLIENT_ID,

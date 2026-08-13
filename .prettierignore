@@ -17,3 +17,4 @@ apps/preview
 .env.*
 !.env.example.md
 CLAUDE.md
+services/api-node/tests/.eve-test-data/**

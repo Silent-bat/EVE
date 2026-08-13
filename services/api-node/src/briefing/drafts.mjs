@@ -1,11 +1,15 @@
 /**
  * Draft action handler: approve or reject a draft reply, optionally sending
  * it via Gmail when approved.
+ *
+ * Mutates both the cached briefing AND the persistent priority inbox so
+ * the status survives a briefing regeneration.
  */
 import { httpError } from "../http/responses.mjs";
 import { state } from "../storage/index.mjs";
 import { dayKey } from "../utils/dates.mjs";
 import { deliverApprovedReply } from "../google/email.mjs";
+import { setInboxStatus } from "./priorityInbox.mjs";
 
 /**
  * @param {string} userID
@@ -29,7 +33,9 @@ export async function actOnDraft(userID, draftID, input) {
   if (typeof input.draftReply === "string" && input.draftReply.trim()) {
     draft.draftReply = input.draftReply.trim();
   }
-  draft.status = action === "approve" ? "approved" : "rejected";
+  const newStatus = action === "approve" ? "approved" : "rejected";
+  draft.status = newStatus;
+  setInboxStatus(userID, draftID, newStatus);
   briefing.stats.approvedReplies = briefing.emails.filter(
     (/** @type {any} */ email) => email.status === "approved",
   ).length;

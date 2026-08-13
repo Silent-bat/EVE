@@ -4,27 +4,42 @@
  * Every 60s we sweep users; for each Google-connected user whose
  * lastGmailPollAt is older than POLL_INTERVAL_MS (default 3h), we:
  *
- *   1. Re-run generateBriefing(now) — this fetches Gmail + Calendar and
- *      re-ranks via Gemini analysis (or local fallback).
- *   2. Compare the new high-priority set to the previously-known one.
- *   3. If there are new priority items, append a system notification so the
+ *   1. Capture the priority inbox state + known-IDs count.
+ *   2. Call generateBriefing(now) — this diff-first polls Gmail, fetches
+ *      only new messages, analyzes them, upserts to the priority inbox,
+ *      then assembles the briefing from the store.
+ *   3. Diff the post-refresh priority inbox against the pre-refresh
+ *      snapshot to detect genuinely new priority items.
+ *   4. If there are new priority items, append a system notification so the
  *      mobile app surfaces it through the existing /v1/device-notifications
  *      tab.
- *   4. Update the user's gmailPoll bookkeeping and save.
+ *   5. Update the user's gmailPoll bookkeeping and save.
  *
  * Idempotent: if the poller runs again within POLL_INTERVAL_MS it no-ops.
  */
 import { moduleLogger } from "../logger.mjs";
+import { sendPushToUser } from "../notifications/push.mjs";
 import { save, state } from "../storage/index.mjs";
-import { dayKey } from "../utils/dates.mjs";
 import { generateBriefing } from "./generate.mjs";
 import { appendSystemNotification } from "./tools.mjs";
+import { getKnownMessageIds, listPriorityInbox } from "./priorityInbox.mjs";
 
 const log = moduleLogger("briefing.gmail-poller");
 
-export const POLL_INTERVAL_MS = Number(process.env.GMAIL_POLL_INTERVAL_MS || 3 * 60 * 60 * 1000);
+// 15 minutes by default. The previous 3h default felt broken on app open
+// because new Gmail messages took up to 3h to surface; 15min is short
+// enough that users perceive the inbox as "fresh", long enough to stay
+// under the Gmail + Gemini cost budget.
+export const POLL_INTERVAL_MS = Number(process.env.GMAIL_POLL_INTERVAL_MS || 15 * 60 * 1000);
 export const SWEEP_INTERVAL_MS = Number(process.env.GMAIL_POLL_SWEEP_INTERVAL_MS || 60_000);
-const PRIORITY_THRESHOLD = 75;
+/**
+ * Score at or above which a newly-arrived mail is worth a push notification.
+ * Deliberately stricter than both the inbox admission floor and the score the
+ * UI calls "High" — appearing in the list is cheap, buzzing a phone is not.
+ * Was named PRIORITY_THRESHOLD, which shadowed the export of that name in
+ * priorityInbox.mjs holding a different number.
+ */
+const NOTIFY_THRESHOLD = 75;
 
 /**
  * Run one full sweep over users. Exported so tests + admin endpoints can
@@ -63,50 +78,58 @@ export async function sweepGmailPollers(opts = {}) {
  * @param {Date} now
  */
 async function pollOne(userID, now) {
-  const today = dayKey(now);
-  const before = state.briefings[userID]?.[today];
-  const knownIds = new Set((before?.emails || []).map((/** @type {any} */ e) => e.id));
-  const knownPriorityIds = new Set(
-    (before?.emails || [])
-      .filter((/** @type {any} */ e) => e.urgencyScore >= PRIORITY_THRESHOLD)
-      .map((/** @type {any} */ e) => e.id),
+  // Snapshot priority inbox and known-IDs count so we can detect what
+  // arrived during this poll cycle.
+  const beforePriorityIds = new Set(
+    listPriorityInbox(userID).map((/** @type {any} */ e) => e.id),
   );
+  const beforeKnownCount = getKnownMessageIds(userID).size;
 
   const briefing = await generateBriefing(userID, now);
-  const newEmails = (briefing.emails || []).filter(
-    (/** @type {any} */ e) => !knownIds.has(e.id),
+
+  const afterPriority = listPriorityInbox(userID);
+  const newPriority = afterPriority.filter(
+    (/** @type {any} */ e) => !beforePriorityIds.has(e.id) && e.urgencyScore >= NOTIFY_THRESHOLD,
   );
-  const newPriority = (briefing.emails || []).filter(
-    (/** @type {any} */ e) => e.urgencyScore >= PRIORITY_THRESHOLD && !knownPriorityIds.has(e.id),
-  );
+  const afterKnownCount = getKnownMessageIds(userID).size;
+  const newEmailCount = Math.max(0, afterKnownCount - beforeKnownCount);
 
   const user = state.users[userID];
   user.gmailPoll.lastPollAt = now.toISOString();
   user.gmailPoll.lastPollCount = briefing.emails?.length || 0;
-  user.gmailPoll.lastNewCount = newEmails.length;
+  user.gmailPoll.lastNewCount = newEmailCount;
   user.gmailPoll.lastNewPriorityCount = newPriority.length;
 
+  let pushPayload = null;
   if (newPriority.length > 0) {
     const top = newPriority[0];
-    appendSystemNotification(userID, {
-      title:
-        newPriority.length === 1
-          ? "1 new priority email"
-          : `${newPriority.length} new priority emails`,
+    pushPayload = {
+      title: newPriority.length === 1 ? "1 new priority email" : `${newPriority.length} new priority emails`,
       body: `Top: "${top.subject}" from ${top.senderName || top.senderEmail}.`,
-    });
-  } else if (newEmails.length > 0) {
-    appendSystemNotification(userID, {
-      title:
-        newEmails.length === 1 ? "1 new email" : `${newEmails.length} new emails`,
+      data: { kind: "gmail.priority", count: newPriority.length },
+    };
+    appendSystemNotification(userID, pushPayload);
+  } else if (newEmailCount > 0) {
+    pushPayload = {
+      title: newEmailCount === 1 ? "1 new email" : `${newEmailCount} new emails`,
       body: "Gmail refreshed. Open EVE to review.",
-    });
+      data: { kind: "gmail.new", count: newEmailCount },
+    };
+    appendSystemNotification(userID, pushPayload);
+  }
+
+  if (pushPayload && user.preferences?.pushEnabled !== false) {
+    try {
+      await sendPushToUser(userID, pushPayload);
+    } catch (error) {
+      log.warn({ err: error, userID }, "push send failed");
+    }
   }
 
   log.info(
     {
       userID,
-      newEmails: newEmails.length,
+      newEmails: newEmailCount,
       newPriority: newPriority.length,
       total: briefing.emails?.length || 0,
     },
@@ -122,9 +145,6 @@ export function startGmailPollerLoop() {
   const handle = setInterval(() => {
     void sweepGmailPollers().catch((err) => log.error({ err }, "sweep crashed"));
   }, SWEEP_INTERVAL_MS);
-  log.info(
-    { pollIntervalMs: POLL_INTERVAL_MS, sweepIntervalMs: SWEEP_INTERVAL_MS },
-    "gmail poller started",
-  );
+  log.info({ pollIntervalMs: POLL_INTERVAL_MS, sweepIntervalMs: SWEEP_INTERVAL_MS }, "gmail poller started");
   return handle;
 }

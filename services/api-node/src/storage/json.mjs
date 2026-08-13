@@ -32,6 +32,9 @@ export async function loadFromJSON() {
  * @param {import("./state.mjs").StateShape} state
  */
 export async function saveToJSON(state) {
-  await mkdir(path.dirname(config.statePath), { recursive: true });
-  await writeFile(config.statePath, JSON.stringify(state, null, 2));
+  // 0700 / 0600: this file holds Google refresh tokens and password hashes, and
+  // the default would leave it readable by every local account. Only applies to
+  // files created from here on — chmod an existing state.json by hand.
+  await mkdir(path.dirname(config.statePath), { recursive: true, mode: 0o700 });
+  await writeFile(config.statePath, JSON.stringify(state, null, 2), { mode: 0o600 });
 }

@@ -1,23 +1,20 @@
-import { Ionicons } from "@expo/vector-icons";
+/**
+ * Top-level container. Owns state, side-effects, and handlers; renders
+ * no UI directly — the screens and primitives live in src/. Keep this
+ * file focused on coordination so it stays small.
+ */
 import { StatusBar } from "expo-status-bar";
-import { Component, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
-import {
-  AppState,
-  Linking,
-  NativeModules,
-  Platform,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AppState, Linking, Platform, ScrollView, StyleSheet, View } from "react-native";
+// Android 15 / Expo SDK 54 draw the app edge to edge, and React Native's own
+// SafeAreaView only insets on iOS — so on Android it silently does nothing and
+// the header lands under the status bar. Everything that owns a full screen uses
+// this one instead.
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import { config } from "./src/config";
 import { apiFetch as apiFetchClient, ApiError, tokenStore } from "./src/api/client";
+import { configureForegroundHandler, registerPushToken } from "./src/notifications/push";
 import {
   configureNotificationSync,
   isNotificationAccessGranted,
@@ -27,143 +24,226 @@ import {
   subscribeToNotificationPermission,
 } from "./src/native/EveNotificationListener";
 import type {
-  AssistantAnswer,
   AuditEntry,
   Briefing,
   BriefingEmail,
+  BriefingRange,
   DeviceNotification,
   EmailStatus,
   Preferences,
   Session,
 } from "./src/types";
 
-type Tab = "briefing" | "approvals" | "audit" | "settings";
-type Tone = "green" | "coral" | "neutral";
-type AuthMode = "login" | "signup";
+import { AppErrorBoundary } from "./src/auth/AppErrorBoundary";
+import { AuthScreen, type AuthMode } from "./src/auth/AuthScreen";
+import { BootScreen } from "./src/onboarding/BootScreen";
+import { OnboardingFlow } from "./src/onboarding/OnboardingFlow";
+import { ReconnectScreen } from "./src/onboarding/ReconnectScreen";
+import {
+  clearOnboardingProgress,
+  completeOnboarding,
+  readOnboardingProgress,
+} from "./src/onboarding/storage";
+import {
+  googleErrorCode,
+  googleLoginReturnURL,
+  loadNativeGoogleSignIn,
+  nativeGoogleSignInSupported,
+} from "./src/auth/googleSignIn";
+
+import { ThemeProvider, useTheme, useThemedStyles, type ThemeValue } from "./src/ui/ThemeContext";
+import { ErrorBanner } from "./src/ui/primitives";
+import { FadeSlideIn } from "./src/ui/motion";
+import { BottomNav, BOTTOM_NAV_CLEARANCE, type NavTab } from "./src/ui/components";
+import { TodayScreen } from "./src/home/TodayScreen";
+import { ChatModal } from "./src/chat/ChatModal";
+import { BriefingTab } from "./src/briefing/BriefingTab";
+import { MailScreen } from "./src/briefing/MailScreen";
+import { AuditTab } from "./src/audit/AuditTab";
+import { useListenFromHomeEnabled } from "./src/settings/devicePrefs";
+import { SettingsTab, type SettingsEntry } from "./src/settings/SettingsTab";
+import { Sidebar, type SidebarDestination } from "./src/settings/Sidebar";
+import { ChatScreen } from "./src/chat/ChatScreen";
+import { fetchInbox } from "./src/proactive/api";
+import { VoiceScreen } from "./src/voice/VoiceScreen";
+import { OrbTestScreen } from "./src/voice/OrbTestScreen";
+import { clearVoiceCache } from "./src/voice/cache";
+import {
+  clearAllCache,
+  readCache,
+  readLastUserID,
+  rememberLastUserID,
+  writeCache,
+} from "./src/storage/localCache";
+
+import { tokenFromURL } from "./src/utils/formatters";
+import {
+  DEFAULT_PREFERENCES,
+  EMPTY_BRIEFING,
+  normalizeBriefing,
+  normalizePreferences,
+  normalizeSession,
+} from "./src/utils/normalizers";
 
 const API_BASE_URL = config.apiBaseURL;
-const IS_EXPO_GO = config.isExpoGo;
-const LOCAL_USER_ID = config.localUserId;
 const AUTH_BOOT_TIMEOUT_MS = config.auth.bootTimeoutMs;
-const WEB_GOOGLE_RETURN_URL = config.google.webReturnUrl;
 const GOOGLE_WEB_CLIENT_ID = config.google.webClientId;
 const GOOGLE_SCOPES = config.google.scopes;
-const DEFAULT_PREFERENCES: Preferences = {
-  userId: LOCAL_USER_ID,
-  briefingTime: config.preferences.defaultBriefingTime,
-  pushEnabled: true,
-  timezone: config.preferences.defaultTimezone,
+// Native sign-in fails for a whole family of setup reasons that all look
+// different (DEVELOPER_ERROR 10, SIGN_IN_FAILED 12500, missing Play
+// Services 2) and none of which improve on retry. Rather than enumerate
+// them, treat any native failure as a cue to try the browser — except the
+// two that are intentional, where launching a browser would be wrong.
+// The Android bridge reports codes as bare numbers, hence both spellings.
+const GOOGLE_NATIVE_NO_FALLBACK_CODES = ["SIGN_IN_CANCELLED", "12501", "IN_PROGRESS", "12502"];
+
+/**
+ * The four destinations on the nav bar: Home, Briefing, Messages, Activity.
+ * The raised centre button is voice, which is a mode rather than a place — you
+ * enter it, say something, and come back out to wherever you were.
+ *
+ * Settings is deliberately not here. It left the bar for the avatar menu: it's
+ * a place you visit occasionally, and giving it a permanent quarter of the
+ * bar's width crowded out Messages, which you use every day.
+ *
+ * "Approve" is absent for the same class of reason. Draft approval happens in
+ * the Needs Attention section of Home, where the decision sits next to the mail
+ * that prompted it instead of in a queue you have to remember to visit.
+ */
+type Tab = "today" | "briefing" | "messages" | "audit";
+
+const NAV_TABS: NavTab[] = [
+  { key: "today", label: "Home", icon: "home-outline", iconActive: "home" },
+  { key: "briefing", label: "Briefing", icon: "newspaper-outline", iconActive: "newspaper" },
+  { key: "messages", label: "Messages", icon: "chatbubble-outline", iconActive: "chatbubble" },
+  // Receipt rather than clock: Ionicons' filled `time` is a solid disc with the
+  // hands knocked out, so the active Activity tab read as a badge next to three
+  // line glyphs. `receipt` stays a glyph in both states, and it already labels
+  // this screen's empty state.
+  { key: "audit", label: "Activity", icon: "receipt-outline", iconActive: "receipt" },
+];
+
+/**
+ * Where each sidebar row lands in settings. The drawer names things the way a
+ * person would ("What EVE knows"); settings organises them by page. This is the
+ * one place that mapping lives.
+ */
+const SIDEBAR_TO_SETTINGS: Record<SidebarDestination, SettingsEntry> = {
+  settings: "index",
+  account: "account",
+  memory: "profile",
 };
-const EMPTY_BRIEFING: Briefing = {
-  id: "briefing-empty",
-  userId: LOCAL_USER_ID,
-  generatedAt: new Date(0).toISOString(),
-  stats: {
-    priorityEmails: 0,
-    meetingsToday: 0,
-    approvedReplies: 0,
-  },
-  emails: [],
-  calendar: [],
-};
-
-type ErrorBoundaryProps = {
-  children: ReactNode;
-};
-
-type ErrorBoundaryState = {
-  error: Error | null;
-};
-
-class AppErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { error: null };
-
-  static getDerivedStateFromError(error: Error) {
-    return { error };
-  }
-
-  render() {
-    if (!this.state.error) return this.props.children;
-
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <StatusBar style="dark" />
-        <View style={styles.connectScreen}>
-          <View style={styles.mark}>
-            <Text style={styles.markText}>E</Text>
-          </View>
-          <Text style={styles.connectTitle}>EVE hit an app error.</Text>
-          <Text style={styles.connectCopy}>
-            {this.state.error.message || "Reload the app and try again."}
-          </Text>
-          <Text style={styles.debugText}>API: {API_BASE_URL}</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-}
 
 export default function App() {
   return (
-    <AppErrorBoundary>
-      <EVEApp />
-    </AppErrorBoundary>
+    // Outermost, above the error boundary: the crash screen insets too, and it
+    // would throw for want of a provider if this sat inside the boundary.
+    <SafeAreaProvider>
+      <AppErrorBoundary>
+        <ThemeProvider>
+          <EVEApp />
+        </ThemeProvider>
+      </AppErrorBoundary>
+    </SafeAreaProvider>
   );
 }
 
 function EVEApp() {
+  const { scheme } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [authMode, setAuthMode] = useState<AuthMode>("signup");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [session, setSession] = useState<Session | null>(null);
-  const [tab, setTab] = useState<Tab>("briefing");
+  const [tab, setTab] = useState<Tab>("today");
+  const [chatVisible, setChatVisible] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  /**
+   * Which settings page is open, or null for none. Settings left the nav bar
+   * for the avatar menu, so it is a layer over the current tab rather than a
+   * fifth destination — and while it's open the nav bar hides, because on a
+   * sub-page the back button is the navigation and a tab bar there offers to
+   * abandon a page you're in the middle of.
+   */
+  const [settingsEntry, setSettingsEntry] = useState<SettingsEntry | null>(null);
   const [briefing, setBriefing] = useState<Briefing>(EMPTY_BRIEFING);
-  const [selectedEmailId, setSelectedEmailId] = useState<string | undefined>(undefined);
-  const [editingEmailId, setEditingEmailId] = useState<string | null>(null);
-  const [draftValue, setDraftValue] = useState("");
-  const [assistantPrompt, setAssistantPrompt] = useState("");
-  const [assistantAnswer, setAssistantAnswer] = useState<AssistantAnswer | null>(null);
-  const [assistantLoading, setAssistantLoading] = useState(false);
+  const [briefingRange, setBriefingRange] = useState<BriefingRange>("day");
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES);
   const [deviceNotifications, setDeviceNotifications] = useState<DeviceNotification[]>([]);
   const [notificationAccessEnabled, setNotificationAccessEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Tracks whether the initial loadV1() has completed at least once. After
+  // that, background refreshes don't kick us back to the full-screen
+  // BootScreen — they update in place. This prevents the "Getting your
+  // workspace ready" flash every 30s when the interval-driven refresh fires.
+  const [bootCompleted, setBootCompleted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [inboxNewCount, setInboxNewCount] = useState(0);
+  const [voiceVisible, setVoiceVisible] = useState(false);
+  const [orbTestVisible, setOrbTestVisible] = useState(false);
+  /**
+   * The mail being read, if any. Held here rather than per-tab because both
+   * Home and Briefing open it and the modal has to outlive a tab switch — and
+   * kept as the whole row, not an id, so the header renders before the body
+   * lands.
+   */
+  const [openEmail, setOpenEmail] = useState<BriefingEmail | null>(null);
+  // Device-local, like the theme: whether Home carries the ask dock. Off until
+  // AsyncStorage says otherwise, so the default home screen leads with findings
+  // rather than with an input box.
+  const [listenFromHomeEnabled, setListenFromHomeEnabled] = useListenFromHomeEnabled();
+  // null while we're still reading the stored onboarding record. Routing waits
+  // on it rather than guessing, so a returning user never sees a flash of the
+  // first-run flow they already finished.
+  const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
 
   const loadV1 = useCallback(async () => {
     if (!authToken) {
       setLoading(false);
       return;
     }
-
     setLoading(true);
     setApiError(null);
     try {
-      const [nextSession, nextBriefing, auditPayload, notificationsPayload] = await Promise.all([
-        apiFetch<Session>("/v1/session"),
-        apiFetch<Briefing>("/v1/briefings/today"),
-        apiFetch<{ entries: AuditEntry[] }>("/v1/audit"),
-        apiFetch<{ entries: DeviceNotification[] }>("/v1/device-notifications"),
-      ]);
+      const [nextSession, nextBriefing, auditPayload, notificationsPayload, inboxPayload] = await Promise.all(
+        [
+          apiFetch<Session>("/v1/session"),
+          apiFetch<Briefing>(`/v1/briefings/today?range=${briefingRange}`),
+          apiFetch<{ entries: AuditEntry[] }>("/v1/audit"),
+          apiFetch<{ entries: DeviceNotification[] }>("/v1/device-notifications"),
+          fetchInbox({ status: "new", limit: 50 }).catch(() => ({ thoughts: [] })),
+        ],
+      );
 
       const safeSession = normalizeSession(nextSession);
       const safeBriefing = normalizeBriefing(nextBriefing);
       setSession(safeSession);
       setPreferences(safeSession.preferences);
       setBriefing(safeBriefing);
-      setSelectedEmailId(safeBriefing.emails[0]?.id);
-      setAudit(Array.isArray(auditPayload.entries) ? auditPayload.entries.slice().reverse() : []);
-      setDeviceNotifications(Array.isArray(notificationsPayload.entries) ? notificationsPayload.entries : []);
+      const safeAudit = Array.isArray(auditPayload.entries) ? auditPayload.entries.slice().reverse() : [];
+      setAudit(safeAudit);
+      const safeDevice = Array.isArray(notificationsPayload.entries) ? notificationsPayload.entries : [];
+      setDeviceNotifications(safeDevice);
+      setInboxNewCount(inboxPayload.thoughts.length);
+
+      // Write-back so the next cold start renders instantly.
+      const userID = safeSession.userId;
+      if (userID) {
+        void rememberLastUserID(userID);
+        void writeCache(userID, "briefing", safeBriefing);
+        void writeCache(userID, "audit", safeAudit);
+        void writeCache(userID, "preferences", safeSession.preferences);
+        void writeCache(userID, "deviceNotifications", safeDevice);
+        void writeCache(userID, "inboxNewCount", inboxPayload.thoughts.length);
+      }
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "API is unavailable");
     } finally {
       setLoading(false);
+      setBootCompleted(true);
     }
-  }, [authToken]);
+  }, [authToken, briefingRange]);
 
   useEffect(() => {
     let active = true;
@@ -200,12 +280,113 @@ function EVEApp() {
   }, []);
 
   useEffect(() => {
-    if (authToken) {
-      void tokenStore.set(authToken);
-    } else if (tokenStore.current) {
-      void tokenStore.clear();
-    }
+    if (authToken) void tokenStore.set(authToken);
+    else if (tokenStore.current) void tokenStore.clear();
   }, [authToken]);
+
+  // apiFetch drops the stored token when the server rejects it, which can
+  // happen mid-session (an expired session outlives the app's own state).
+  // Without this the store would be empty while React still believed it was
+  // signed in, leaving the UI stuck on an error instead of the login screen.
+  const hadTokenRef = useRef(false);
+  // Settings renders sub-pages inside this scroller, so pushing one has to
+  // bring the new page's header back into view.
+  const scrollRef = useRef<ScrollView>(null);
+  useEffect(
+    () =>
+      tokenStore.subscribe((token) => {
+        setAuthToken(token);
+        // Only explain the drop when we were actually signed in. Logout and
+        // the boot-timeout path clear the token too, and both already set a
+        // message that fits their situation better than this one.
+        if (!token && hadTokenRef.current) {
+          setApiError("Your session expired. Sign in again.");
+        }
+        hadTokenRef.current = Boolean(token);
+      }),
+    [],
+  );
+
+  // Hydrate cached briefing / audit / preferences / inbox before
+  // loadV1 settles. Runs as soon as we have a token (we don't yet
+  // know the userID, so we use the lastUserID anchor written at
+  // login). loadV1 will overwrite with fresh server data on success;
+  // until then the UI shows the user's previous-session view instead
+  // of an empty workspace.
+  useEffect(() => {
+    if (!authToken) return;
+    let active = true;
+    void (async () => {
+      const lastUserID = await readLastUserID();
+      if (!lastUserID || !active) return;
+      const [cachedBriefing, cachedAudit, cachedPrefs, cachedDevice, cachedInboxCount] =
+        await Promise.all([
+          readCache(lastUserID, "briefing"),
+          readCache(lastUserID, "audit"),
+          readCache(lastUserID, "preferences"),
+          readCache(lastUserID, "deviceNotifications"),
+          readCache(lastUserID, "inboxNewCount"),
+        ]);
+      if (!active) return;
+      if (cachedBriefing) setBriefing(cachedBriefing);
+      if (cachedAudit) setAudit(cachedAudit);
+      if (cachedPrefs) setPreferences(cachedPrefs);
+      if (cachedDevice) setDeviceNotifications(cachedDevice);
+      if (typeof cachedInboxCount === "number") setInboxNewCount(cachedInboxCount);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [authToken]);
+
+  // Decide whether this account still needs the guided first run. Waits for
+  // bootCompleted because the answer depends on googleConnected, which only
+  // arrives with the session.
+  const googleConnected = Boolean(session?.googleConnected);
+  const sessionUserID = session?.userId ?? null;
+  useEffect(() => {
+    if (!authToken) {
+      setOnboardingDone(null);
+      return;
+    }
+    if (!bootCompleted) return;
+    let active = true;
+    void (async () => {
+      const stored = await readOnboardingProgress(sessionUserID);
+      if (!active) return;
+      if (stored?.completed) {
+        setOnboardingDone(true);
+        return;
+      }
+      // An account that is already connected but has no onboarding record
+      // predates this flow. It has everything the flow would ask for, so mark
+      // it done rather than walking a working install through a tour.
+      if (!stored && googleConnected) {
+        await completeOnboarding(sessionUserID);
+        if (active) setOnboardingDone(true);
+        return;
+      }
+      setOnboardingDone(false);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [authToken, bootCompleted, googleConnected, sessionUserID]);
+
+  useEffect(() => {
+    configureForegroundHandler();
+  }, []);
+
+  // Deliberately waits for onboarding to finish. registerPushToken raises the
+  // OS permission dialog, and firing it the instant a token exists would drop
+  // a bare system prompt on top of the welcome step — before the screen that
+  // explains what the notification is for. During the first run the
+  // personalize step owns that request; afterwards this keeps the stored token
+  // fresh on every launch, since Expo can rotate it.
+  useEffect(() => {
+    if (!authToken || onboardingDone !== true) return;
+    void registerPushToken();
+  }, [authToken, onboardingDone]);
 
   useEffect(() => {
     if (authChecked) void loadV1();
@@ -217,6 +398,12 @@ function EVEApp() {
       GoogleSignin.configure({
         webClientId: GOOGLE_WEB_CLIENT_ID,
         scopes: GOOGLE_SCOPES,
+        // offlineAccess + forceCodeForRefreshToken make Google return a
+        // serverAuthCode the backend can exchange for a refresh token.
+        // Without this, the access token expires after 1h and the backend
+        // can never renew it on its own — Gmail / Calendar silently 401.
+        offlineAccess: true,
+        forceCodeForRefreshToken: true,
       });
     });
   }, []);
@@ -238,8 +425,15 @@ function EVEApp() {
   }, [authToken, loadV1]);
 
   useEffect(() => {
-    if (!authToken || !notificationAccessSupported) return;
+    if (!authToken) return;
+    const interval = setInterval(() => {
+      if (AppState.currentState === "active") void loadV1();
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [authToken, loadV1]);
 
+  useEffect(() => {
+    if (!authToken || !notificationAccessSupported) return;
     configureNotificationSync(API_BASE_URL, authToken);
     void isNotificationAccessGranted().then(setNotificationAccessEnabled);
     const unsubscribePermission = subscribeToNotificationPermission((event) => {
@@ -258,7 +452,6 @@ function EVEApp() {
         body: event.body,
         postedAt,
       };
-
       void apiFetch<DeviceNotification>("/v1/device-notifications", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -272,7 +465,6 @@ function EVEApp() {
           setApiError(error instanceof Error ? error.message : "Could not sync notification"),
         );
     });
-
     return () => {
       unsubscribePermission();
       unsubscribeNotifications();
@@ -284,12 +476,9 @@ function EVEApp() {
     [briefing.emails],
   );
 
-  const selectedEmail = briefing.emails.find((email) => email.id === selectedEmailId) ?? briefing.emails[0];
-
   const finishGoogleLogin = useCallback(async (url: string) => {
     const token = tokenFromURL(url);
     if (!token) return false;
-
     await tokenStore.set(token);
     setAuthToken(token);
     setApiError(null);
@@ -310,16 +499,23 @@ function EVEApp() {
     return () => subscription.remove();
   }, [finishGoogleLogin]);
 
-  async function submitAuth() {
+  useEffect(() => {
+    if (!__DEV__) return;
+    const openIfOrbTest = (url: string | null) => {
+      if (url?.startsWith("eve://orb-test")) setOrbTestVisible(true);
+    };
+    void Linking.getInitialURL().then(openIfOrbTest);
+    const subscription = Linking.addEventListener("url", (event) => openIfOrbTest(event.url));
+    return () => subscription.remove();
+  }, []);
+
+  async function submitAuth({ email, password, mode }: { email: string; password: string; mode: AuthMode }) {
     setSaving(true);
     setApiError(null);
     try {
       const result = await apiFetch<{ token: string; session: Session }>(
-        authMode === "signup" ? "/v1/auth/signup" : "/v1/auth/login",
-        {
-          method: "POST",
-          body: JSON.stringify({ email, password }),
-        },
+        mode === "signup" ? "/v1/auth/signup" : "/v1/auth/login",
+        { method: "POST", body: JSON.stringify({ email, password }) },
         null,
       );
       await tokenStore.set(result.token);
@@ -333,64 +529,80 @@ function EVEApp() {
     }
   }
 
+  // Hands the browser the consent URL and lets the `eve://` deep link
+  // carry the session token back. Works off the web client, so it is
+  // unaffected by the Android client's certificate registration.
+  async function startGoogleWebLogin() {
+    const returnTo = googleLoginReturnURL();
+    const auth = await apiFetch<{ configured: boolean; url: string | null; reason?: string }>(
+      `/v1/auth/google-url?returnTo=${encodeURIComponent(returnTo)}`,
+      {},
+      null,
+    );
+    if (!auth.configured || !auth.url) {
+      throw new Error(auth.reason || "Google login is not configured");
+    }
+    await Linking.openURL(auth.url);
+  }
+
   async function loginWithGoogle() {
     setSaving(true);
     setApiError(null);
     try {
-      if (Platform.OS !== "web") {
-        if (!nativeGoogleSignInSupported()) {
-          throw new Error("Gmail login requires the EVE development build. Use email/password in Expo Go.");
-        }
-        const { GoogleSignin, isCancelledResponse } = await loadNativeGoogleSignIn();
-        await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
-        const signIn = await GoogleSignin.signIn();
-        if (isCancelledResponse(signIn)) {
-          setSaving(false);
+      if (Platform.OS !== "web" && nativeGoogleSignInSupported()) {
+        try {
+          const { GoogleSignin, isCancelledResponse } = await loadNativeGoogleSignIn();
+          await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+          const signIn = await GoogleSignin.signIn();
+          if (isCancelledResponse(signIn)) {
+            setSaving(false);
+            return;
+          }
+          const tokens = await GoogleSignin.getTokens();
+          if (!tokens.accessToken) throw new Error("Google login did not return an access token.");
+
+          const result = await apiFetch<{ token: string; session: Session }>(
+            "/v1/auth/google-native",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                clientId: GOOGLE_WEB_CLIENT_ID,
+                accessToken: tokens.accessToken,
+                idToken: tokens.idToken || signIn.data.idToken || "",
+                // serverAuthCode is what offlineAccess=true gives us. The
+                // backend exchanges it for a refresh token so it can renew
+                // the access token after expiry — otherwise Gmail / Calendar
+                // 401 after an hour and the briefing goes empty.
+                serverAuthCode: signIn.data.serverAuthCode || "",
+                tokenType: "Bearer",
+                expiresIn: 3600,
+                scope: GOOGLE_SCOPES.join(" "),
+              }),
+            },
+            null,
+          );
+          await tokenStore.set(result.token);
+          const safeSession = normalizeSession(result.session);
+          setAuthToken(result.token);
+          setSession(safeSession);
+          setPreferences(safeSession.preferences);
           return;
+        } catch (nativeError) {
+          if (GOOGLE_NATIVE_NO_FALLBACK_CODES.includes(googleErrorCode(nativeError))) {
+            throw nativeError;
+          }
+          // Surfaced so a native misconfiguration stays diagnosable instead
+          // of being hidden by the browser flow silently taking over.
+          console.warn(
+            `[eve] native Google sign-in failed (code ${googleErrorCode(nativeError) || "none"}), falling back to browser:`,
+            nativeError,
+          );
         }
-
-        const tokens = await GoogleSignin.getTokens();
-        if (!tokens.accessToken) throw new Error("Google login did not return an access token.");
-
-        const result = await apiFetch<{ token: string; session: Session }>(
-          "/v1/auth/google-native",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              clientId: GOOGLE_WEB_CLIENT_ID,
-              accessToken: tokens.accessToken,
-              idToken: tokens.idToken || signIn.data.idToken || "",
-              tokenType: "Bearer",
-              expiresIn: 3600,
-              scope: GOOGLE_SCOPES.join(" "),
-            }),
-          },
-          null,
-        );
-        await tokenStore.set(result.token);
-        const safeSession = normalizeSession(result.session);
-        setAuthToken(result.token);
-        setSession(safeSession);
-        setPreferences(safeSession.preferences);
-        return;
       }
 
-      const returnTo = googleLoginReturnURL();
-      const auth = await apiFetch<{ configured: boolean; url: string | null; reason?: string }>(
-        `/v1/auth/google-url?returnTo=${encodeURIComponent(returnTo)}`,
-        {},
-        null,
-      );
-      if (!auth.configured || !auth.url) {
-        throw new Error(auth.reason || "Google login is not configured");
-      }
-      await Linking.openURL(auth.url);
+      await startGoogleWebLogin();
     } catch (error) {
-      if (googleErrorCode(error) === "PLAY_SERVICES_NOT_AVAILABLE") {
-        setApiError("Google Play Services is not available or needs an update.");
-      } else {
-        setApiError(error instanceof Error ? error.message : "Could not start Google login");
-      }
+      setApiError(error instanceof Error ? error.message : "Could not start Google login");
     } finally {
       setSaving(false);
     }
@@ -401,14 +613,70 @@ function EVEApp() {
     try {
       await apiFetch<{ ok: boolean }>("/v1/auth/logout", { method: "POST" });
     } catch {
-    } finally {
-      await tokenStore.clear();
-      setAuthToken(null);
-      setSession(null);
-      setApiError(null);
-      setSaving(false);
-      setTab("briefing");
+      // best-effort
     }
+    // Fully revoke the native Google account (not just signOut). Revoke
+    // wipes both the local cache AND the OAuth grant on Google's side, so
+    // the next "Continue with Gmail" tap re-runs full consent and the
+    // backend gets a fresh serverAuthCode + refresh token. signOut alone
+    // can leave a silent re-login pathway.
+    if (nativeGoogleSignInSupported()) {
+      try {
+        const { GoogleSignin } = await loadNativeGoogleSignIn();
+        try {
+          await GoogleSignin.revokeAccess();
+        } catch {
+          // revokeAccess can fail if there is no current Google session;
+          // fall back to a plain signOut so the cache is at least cleared.
+          try {
+            await GoogleSignin.signOut();
+          } catch {
+            /* best-effort */
+          }
+        }
+      } catch {
+        // best-effort
+      }
+    }
+    // Wipe any cached voice audio (WAV files written by pcmToWav) so a
+    // future user on the same device can't replay them from disk.
+    try {
+      await clearVoiceCache();
+    } catch {
+      // best-effort
+    }
+    // Wipe the AsyncStorage cache (briefing, audit, prefs, voice turns,
+    // assistantAnswer, lastUserID anchor). Without this, the next user
+    // to sign in on this device sees a flash of the previous user's data
+    // before loadV1 settles.
+    try {
+      await clearAllCache();
+    } catch {
+      // best-effort
+    }
+    // Drop the first-run record too. It is device-scoped, so leaving it behind
+    // would hand the next account either a finished flow it never did or a
+    // half-finished one belonging to somebody else.
+    await clearOnboardingProgress();
+    await tokenStore.clear();
+    setAuthToken(null);
+    setSession(null);
+    setApiError(null);
+    setSaving(false);
+    setOnboardingDone(null);
+    setBootCompleted(false); // next sign-in shows the BootScreen again
+    setTab("today");
+    // Bug fix: previously logout left briefing/audit/preferences/etc.
+    // in state, so signing into a second account briefly showed the
+    // previous user's data before loadV1 settled. Reset everything
+    // user-scoped here so a fresh sign-in starts from a blank slate.
+    setBriefing(EMPTY_BRIEFING);
+    setAudit([]);
+    setPreferences(DEFAULT_PREFERENCES);
+    setDeviceNotifications([]);
+    setInboxNewCount(0);
+    setChatVisible(false);
+    setVoiceVisible(false);
   }
 
   async function connectGoogle() {
@@ -420,7 +688,6 @@ function EVEApp() {
         await Linking.openURL(auth.url);
         return;
       }
-
       throw new Error("Google OAuth is not configured on the API.");
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "Could not connect Google");
@@ -433,46 +700,18 @@ function EVEApp() {
     setSaving(true);
     setApiError(null);
     try {
-      const nextBriefing = await apiFetch<Briefing>("/v1/briefings/generate", { method: "POST" });
-      setBriefing(nextBriefing);
-      setSelectedEmailId(nextBriefing.emails[0]?.id);
+      await apiFetch("/v1/gmail/poll", { method: "POST" });
+      await loadV1();
       setTab("briefing");
     } catch (error) {
-      setApiError(error instanceof Error ? error.message : "Could not generate briefing");
+      setApiError(error instanceof Error ? error.message : "Could not refresh");
     } finally {
       setSaving(false);
     }
   }
 
-  async function askAssistant() {
-    const prompt = assistantPrompt.trim();
-    if (!prompt || assistantLoading) return;
-
-    setAssistantLoading(true);
-    setApiError(null);
-    try {
-      const answer = await apiFetch<AssistantAnswer>("/v1/assistant/ask", {
-        method: "POST",
-        body: JSON.stringify({ prompt }),
-      });
-      setAssistantAnswer(answer);
-      setAssistantPrompt("");
-    } catch (error) {
-      setApiError(error instanceof Error ? error.message : "Could not ask EVE");
-    } finally {
-      setAssistantLoading(false);
-    }
-  }
-
-  function beginEdit(email: BriefingEmail) {
-    setSelectedEmailId(email.id);
-    setEditingEmailId(email.id);
-    setDraftValue(email.draftReply);
-  }
-
   async function recordAction(emailId: string, status: EmailStatus, draft?: string) {
     if (status === "pending") return;
-
     setSaving(true);
     setApiError(null);
     try {
@@ -486,12 +725,13 @@ function EVEApp() {
           }),
         },
       );
-
       setBriefing(result.briefing);
-      setAudit((current) => [result.audit, ...current]);
-      const nextPending = result.briefing.emails.find((item) => item.status === "pending");
-      setSelectedEmailId(nextPending?.id ?? emailId);
-      setEditingEmailId(null);
+      setAudit((current) => {
+        const next = [result.audit, ...current];
+        if (session?.userId) void writeCache(session.userId, "audit", next);
+        return next;
+      });
+      if (session?.userId) void writeCache(session.userId, "briefing", result.briefing);
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "Could not update draft");
     } finally {
@@ -508,435 +748,248 @@ function EVEApp() {
         body: JSON.stringify(nextPreferences),
       });
       setPreferences(saved);
+      if (session?.userId) void writeCache(session.userId, "preferences", saved);
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "Could not save preferences");
     }
   }
 
-  if (!authChecked || (loading && !apiError)) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <StatusBar style="dark" />
-        <View style={styles.connectScreen}>
-          <View style={styles.mark}>
-            <Text style={styles.markText}>E</Text>
-          </View>
-          <Text style={styles.connectTitle}>EVE</Text>
-          <Text style={styles.connectCopy}>Loading your workspace.</Text>
-          <Text style={styles.debugText}>API: {API_BASE_URL}</Text>
-          {authChecked ? (
-            <Pressable style={styles.quietFullButton} onPress={logout}>
-              <Text style={styles.quietButtonText}>Reset session</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      </SafeAreaView>
-    );
+  // --- screen routing --------------------------------------------------
+
+  // A deep-linked renderer harness for physical-device tuning. It exists only
+  // in development builds and deliberately sits before auth routing so an
+  // expired account grant cannot prevent testing a visual component.
+  if (__DEV__ && orbTestVisible) {
+    return <OrbTestScreen onClose={() => setOrbTestVisible(false)} />;
+  }
+
+  // Show the full-screen boot only on the very first start — once the initial
+  // loadV1 has completed (success OR explicit error), subsequent background
+  // refreshes don't fall back to this screen.
+  if (!authChecked || (loading && !bootCompleted && !apiError)) {
+    return <BootScreen authChecked={authChecked} onResetSession={logout} />;
   }
 
   if (!authToken) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <StatusBar style="dark" />
-        <ScrollView contentContainerStyle={styles.connectScreen}>
-          <View style={styles.mark}>
-            <Text style={styles.markText}>E</Text>
-          </View>
-          <Text style={styles.connectTitle}>
-            {authMode === "signup" ? "Create your EVE account." : "Welcome back to EVE."}
-          </Text>
-          <Text style={styles.connectCopy}>
-            Sign in to sync your briefings, audit trail, and Android notification captures.
-          </Text>
-
-          <View style={styles.authSwitch}>
-            <Pressable
-              style={[styles.authSwitchButton, authMode === "signup" && styles.activeAuthSwitch]}
-              onPress={() => setAuthMode("signup")}
-            >
-              <Text style={[styles.authSwitchText, authMode === "signup" && styles.activeAuthSwitchText]}>
-                Sign up
-              </Text>
-            </Pressable>
-            <Pressable
-              style={[styles.authSwitchButton, authMode === "login" && styles.activeAuthSwitch]}
-              onPress={() => setAuthMode("login")}
-            >
-              <Text style={[styles.authSwitchText, authMode === "login" && styles.activeAuthSwitchText]}>
-                Log in
-              </Text>
-            </Pressable>
-          </View>
-
-          <TextInput
-            value={email}
-            onChangeText={setEmail}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="email-address"
-            placeholder="Email"
-            style={styles.authInput}
-          />
-          <TextInput
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            placeholder="Password"
-            style={styles.authInput}
-          />
-
-          {apiError ? <Text style={styles.errorText}>{apiError}</Text> : null}
-
-          <Pressable style={styles.primaryButton} onPress={submitAuth} disabled={saving}>
-            <Ionicons name="arrow-forward" size={18} color="#fffdf8" />
-            <Text style={styles.primaryButtonText}>
-              {saving ? "Please wait" : authMode === "signup" ? "Create account" : "Log in"}
-            </Text>
-          </Pressable>
-
-          <Pressable style={styles.googleButton} onPress={loginWithGoogle} disabled={saving}>
-            <Ionicons name="logo-google" size={18} color="#20242a" />
-            <Text style={styles.googleButtonText}>{saving ? "Please wait" : "Continue with Gmail"}</Text>
-          </Pressable>
-        </ScrollView>
-      </SafeAreaView>
+      <AuthScreen
+        onSubmit={submitAuth}
+        onGoogle={loginWithGoogle}
+        saving={saving}
+        apiError={apiError}
+        onDismissError={() => setApiError(null)}
+      />
     );
   }
 
-  if (!session?.googleConnected) {
+  // Signed in, but we haven't read the first-run record yet. Holding the boot
+  // screen for this beat is what keeps a returning user from seeing the
+  // welcome step flash before it resolves.
+  if (onboardingDone === null) {
+    return <BootScreen authChecked onResetSession={logout} />;
+  }
+
+  if (!onboardingDone) {
+    return (
+      <OnboardingFlow
+        userId={sessionUserID}
+        email={session?.email ?? null}
+        googleConnected={googleConnected}
+        preferences={preferences}
+        saving={saving}
+        apiError={apiError}
+        onConnectGoogle={connectGoogle}
+        onRetry={loadV1}
+        onDismissError={() => setApiError(null)}
+        onSavePreferences={(next) => void updatePreferences(next)}
+        onDone={() => setOnboardingDone(true)}
+        onSignOut={logout}
+      />
+    );
+  }
+
+  // Onboarded, but the Google grant has since lapsed. Every mail-backed screen
+  // would be empty from here, so ask for the reconnection instead of showing an
+  // app that quietly does nothing. The `!session` arm is the same condition —
+  // no session means nothing to be connected with — and narrows `session` to
+  // non-null for the main UI below.
+  if (!session || !session.googleConnected) {
+    return (
+      <ReconnectScreen
+        email={session?.email ?? null}
+        saving={saving}
+        apiError={apiError}
+        onConnect={connectGoogle}
+        onRetry={loadV1}
+        onDismissError={() => setApiError(null)}
+        onSignOut={logout}
+      />
+    );
+  }
+
+  // The bar is chrome for the four top-level destinations. A settings page
+  // replaces them, so it takes the bar away with it.
+  const navVisible = settingsEntry === null;
+
+  const errorBanner = apiError ? (
+    <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} onRetry={loadV1} />
+  ) : null;
+
+  if (settingsEntry !== null) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <StatusBar style="dark" />
-        <View style={styles.connectScreen}>
-          <View style={styles.mark}>
-            <Text style={styles.markText}>E</Text>
-          </View>
-          <Text style={styles.connectTitle}>Your morning brief, ready before work.</Text>
-          <Text style={styles.connectCopy}>
-            Connect Google to prepare priority emails, today's meetings, and drafted replies for approval.
-          </Text>
-
-          <Permission icon="mail-outline" title="Gmail" body="Read recent messages and prepare drafts." />
-          <Permission
-            icon="calendar-outline"
-            title="Google Calendar"
-            body="Rank urgent mail against today's events."
+        <StatusBar style={scheme === "dark" ? "light" : "dark"} />
+        <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
+          {errorBanner}
+          <SettingsTab
+            session={session}
+            preferences={preferences}
+            deviceNotifications={deviceNotifications}
+            saving={saving}
+            notificationAccessSupported={notificationAccessSupported}
+            notificationAccessEnabled={notificationAccessEnabled}
+            listenFromHomeEnabled={listenFromHomeEnabled}
+            onChangeListenFromHome={setListenFromHomeEnabled}
+            entry={settingsEntry}
+            onExit={() => setSettingsEntry(null)}
+            onLogout={logout}
+            onAccountDeleted={() => {
+              // The token died with the account, so there is nothing to log out
+              // of — drop straight back to the sign-in screen.
+              setSettingsEntry(null);
+              void logout();
+            }}
+            // Account changes come back as a whole session because several of
+            // them (the name, the Google flags) are read elsewhere in the app.
+            // Preferences ride along inside it, so they are re-seated too.
+            onSessionChange={(next) => {
+              const safe = normalizeSession(next);
+              setSession(safe);
+              setPreferences(safe.preferences);
+            }}
+            onConnectGoogle={() => void connectGoogle()}
+            onUpdatePreferences={updatePreferences}
+            onChangeBriefingTime={(briefingTime) =>
+              setPreferences((current) => ({ ...current, briefingTime }))
+            }
+            onOpenNotificationAccessSettings={openNotificationAccessSettings}
+            onError={setApiError}
+            onNavigate={() => scrollRef.current?.scrollTo({ y: 0, animated: false })}
           />
-          <Permission
-            icon="shield-checkmark-outline"
-            title="Human approval"
-            body="No outgoing action happens without your tap."
-          />
-
-          {apiError ? <Text style={styles.errorText}>{apiError}</Text> : null}
-
-          <Pressable style={styles.primaryButton} onPress={connectGoogle} disabled={saving || loading}>
-            <Ionicons name="checkmark" size={18} color="#fffdf8" />
-            <Text style={styles.primaryButtonText}>
-              {loading ? "Loading" : saving ? "Connecting" : "Connect Google"}
-            </Text>
-          </Pressable>
-
-          {apiError ? (
-            <Pressable style={styles.quietFullButton} onPress={loadV1}>
-              <Text style={styles.quietButtonText}>Retry API</Text>
-            </Pressable>
-          ) : null}
-        </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="dark" />
-      <View style={styles.header}>
-        <View style={styles.headerRow}>
-          <View style={styles.brandRow}>
-            <View style={styles.smallMark}>
-              <Text style={styles.smallMarkText}>E</Text>
-            </View>
-            <View>
-              <Text style={styles.appName}>EVE</Text>
-              <Text style={styles.headerMeta}>
-                {session.email || "Account"} - briefing at {preferences.briefingTime}
-              </Text>
-            </View>
-          </View>
-          <View style={styles.pendingPill}>
-            <View style={styles.dot} />
-            <Text style={styles.pendingText}>{pendingCount} pending</Text>
-          </View>
+      <StatusBar style={scheme === "dark" ? "light" : "dark"} />
+
+      {/* Messages owns its own scroller and keyboard handling, so it sits in
+          the frame directly. Everything else shares the page scroller. */}
+      {tab === "messages" ? (
+        <View style={styles.flex}>
+          {errorBanner}
+          <ChatScreen />
         </View>
-        <View style={styles.tabs}>
-          {(["briefing", "approvals", "audit", "settings"] as Tab[]).map((item) => (
-            <Pressable
-              key={item}
-              style={[styles.tab, tab === item && styles.activeTab]}
-              onPress={() => setTab(item)}
-            >
-              <Text style={[styles.tabText, tab === item && styles.activeTabText]}>
-                {item === "approvals" ? "Approve" : titleCase(item)}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      </View>
+      ) : (
+        <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
+          {errorBanner}
 
-      <ScrollView contentContainerStyle={styles.content}>
-        {apiError ? <Text style={styles.errorText}>{apiError}</Text> : null}
-
-        <View style={styles.promptPanel}>
-          <TextInput
-            value={assistantPrompt}
-            onChangeText={setAssistantPrompt}
-            placeholder="Ask EVE about your Gmail, meetings, or notifications"
-            style={styles.promptInput}
-            returnKeyType="send"
-            onSubmitEditing={askAssistant}
-          />
-          <Pressable
-            style={[
-              styles.promptButton,
-              (!assistantPrompt.trim() || assistantLoading) && styles.disabledButton,
-            ]}
-            onPress={askAssistant}
-            disabled={!assistantPrompt.trim() || assistantLoading}
-          >
-            <Ionicons name={assistantLoading ? "hourglass-outline" : "send"} size={17} color="#fffdf8" />
-          </Pressable>
-        </View>
-
-        {assistantAnswer ? (
-          <View style={styles.answerPanel}>
-            <View style={styles.answerHeader}>
-              <Text style={styles.answerTitle}>EVE</Text>
-              <Text style={styles.answerSource}>{assistantAnswer.source}</Text>
-            </View>
-            <Text style={styles.answerText}>{assistantAnswer.answer}</Text>
-          </View>
-        ) : null}
-
-        {tab === "briefing" && (
-          <>
-            <View style={styles.metrics}>
-              <Metric value={briefing.stats.priorityEmails} label="priority emails" />
-              <Metric value={briefing.stats.meetingsToday} label="meetings today" />
-              <Metric value={briefing.stats.approvedReplies} label="approved replies" />
-            </View>
-
-            <View style={styles.toolbar}>
-              <SectionHeader title="Priority inbox" note={`${pendingCount} awaiting review`} />
-              <Pressable style={styles.iconButton} onPress={refreshBriefing} disabled={saving}>
-                <Ionicons name="refresh" size={18} color="#20242a" />
-              </Pressable>
-            </View>
-
-            {briefing.emails.length === 0 ? (
-              <Text style={styles.empty}>No Gmail messages found yet. Refresh after connecting Gmail.</Text>
-            ) : (
-              briefing.emails.map((email) => (
-                <EmailCard key={email.id} email={email} selected={false} onPress={() => undefined} />
-              ))
-            )}
-
-            <SectionHeader title="Calendar" note="Today" />
-            {briefing.calendar.length === 0 ? (
-              <Text style={styles.empty}>No calendar events found for today.</Text>
-            ) : (
-              briefing.calendar.map((event) => (
-                <View key={event.id} style={styles.row}>
-                  <Text style={styles.eventTime}>{formatTime(event.startsAt)}</Text>
-                  <View style={styles.rowBody}>
-                    <Text style={styles.rowTitle}>{event.title}</Text>
-                    <Text style={styles.rowText}>{event.location}</Text>
-                  </View>
-                </View>
-              ))
-            )}
-          </>
-        )}
-
-        {tab === "approvals" && selectedEmail && (
-          <>
-            <SectionHeader title="Reply approvals" note={`${pendingCount} remaining`} />
-            {briefing.emails.map((email) => (
-              <EmailCard
-                key={email.id}
-                email={email}
-                selected={email.id === selectedEmail.id}
-                onPress={() => {
-                  setSelectedEmailId(email.id);
-                  setEditingEmailId(null);
-                }}
+          <FadeSlideIn key={tab}>
+            {tab === "today" && (
+              <TodayScreen
+                briefing={briefing}
+                email={session.email}
+                name={session.displayName}
+                photoURL={session.photoURL}
+                saving={saving}
+                askEnabled={listenFromHomeEnabled}
+                voiceActive={voiceVisible}
+                onEmailAction={(emailId, status) => void recordAction(emailId, status)}
+                onOpenEmail={setOpenEmail}
+                onOpenMenu={() => setSidebarOpen(true)}
+                onOpenChat={() => setTab("messages")}
+                onOpenVoice={() => setVoiceVisible(true)}
+                onScrollTo={(y) => scrollRef.current?.scrollTo({ y, animated: true })}
+                onError={setApiError}
               />
-            ))}
-
-            <View style={styles.draftPanel}>
-              <SectionHeader title="Draft reply" note={selectedEmail.senderName} />
-              {editingEmailId === selectedEmail.id ? (
-                <TextInput multiline value={draftValue} onChangeText={setDraftValue} style={styles.editor} />
-              ) : (
-                <Text style={styles.draftText}>{selectedEmail.draftReply}</Text>
-              )}
-
-              {selectedEmail.status === "pending" && editingEmailId !== selectedEmail.id && (
-                <View style={styles.actionRow}>
-                  <ActionButton
-                    label="Approve"
-                    icon="checkmark"
-                    tone="green"
-                    onPress={() => recordAction(selectedEmail.id, "approved")}
-                  />
-                  <ActionButton
-                    label="Edit"
-                    icon="create-outline"
-                    tone="neutral"
-                    onPress={() => beginEdit(selectedEmail)}
-                  />
-                  <ActionButton
-                    label="Reject"
-                    icon="close"
-                    tone="coral"
-                    onPress={() => recordAction(selectedEmail.id, "rejected")}
-                  />
-                </View>
-              )}
-
-              {selectedEmail.status === "pending" && editingEmailId === selectedEmail.id && (
-                <View style={styles.actionRowTwo}>
-                  <ActionButton
-                    label="Save and approve"
-                    icon="checkmark"
-                    tone="green"
-                    onPress={() => recordAction(selectedEmail.id, "approved", draftValue.trim())}
-                  />
-                  <ActionButton
-                    label="Cancel"
-                    icon="close"
-                    tone="neutral"
-                    onPress={() => setEditingEmailId(null)}
-                  />
-                </View>
-              )}
-
-              {selectedEmail.status !== "pending" ? (
-                <Text style={styles.empty}>This reply is already {selectedEmail.status}.</Text>
-              ) : null}
-            </View>
-          </>
-        )}
-
-        {tab === "approvals" && !selectedEmail ? (
-          <>
-            <SectionHeader title="Reply approvals" note="0 remaining" />
-            <Text style={styles.empty}>No generated replies are waiting for approval.</Text>
-          </>
-        ) : null}
-
-        {tab === "audit" && (
-          <>
-            <SectionHeader title="Audit log" note={`${audit.length} actions`} />
-            {audit.length === 0 ? (
-              <Text style={styles.empty}>No approved or rejected replies yet.</Text>
-            ) : (
-              audit.map((entry) => (
-                <View key={entry.id} style={styles.row}>
-                  <Text style={styles.auditTime}>{formatTime(entry.createdAt)}</Text>
-                  <View style={styles.rowBody}>
-                    <Text style={styles.rowTitle}>
-                      {entry.action === "approve" ? "Approved reply" : "Rejected reply"}
-                    </Text>
-                    <Text style={styles.rowText}>{entry.subject}</Text>
-                  </View>
-                </View>
-              ))
             )}
-          </>
-        )}
 
-        {tab === "settings" && (
-          <>
-            <SectionHeader title="Preferences" note="Daily briefing" />
-            <View style={styles.row}>
-              <Ionicons name="person-circle-outline" size={22} color="#20242a" />
-              <View style={styles.rowBody}>
-                <Text style={styles.rowTitle}>{session.email || "EVE account"}</Text>
-                <Text style={styles.rowText}>Authenticated session is stored on this device.</Text>
-              </View>
-              <Pressable style={styles.inlineButton} onPress={logout} disabled={saving}>
-                <Text style={styles.inlineButtonText}>Log out</Text>
-              </Pressable>
-            </View>
-            <View style={styles.row}>
-              <Ionicons name="time-outline" size={22} color="#20242a" />
-              <View style={styles.rowBody}>
-                <Text style={styles.rowTitle}>Briefing time</Text>
-                <TextInput
-                  value={preferences.briefingTime}
-                  onChangeText={(value) => setPreferences((current) => ({ ...current, briefingTime: value }))}
-                  onEndEditing={() => updatePreferences(preferences)}
-                  style={styles.timeInput}
-                  keyboardType="numbers-and-punctuation"
-                />
-              </View>
-            </View>
-            <View style={styles.row}>
-              <Ionicons name="notifications-outline" size={22} color="#20242a" />
-              <View style={styles.rowBody}>
-                <Text style={styles.rowTitle}>Push notifications</Text>
-                <Text style={styles.rowText}>Morning briefing and action receipts.</Text>
-              </View>
-              <Switch
-                value={preferences.pushEnabled}
-                onValueChange={(value) => updatePreferences({ ...preferences, pushEnabled: value })}
+            {tab === "briefing" && (
+              <BriefingTab
+                briefing={briefing}
+                pendingCount={pendingCount}
+                saving={saving}
+                range={briefingRange}
+                onChangeRange={setBriefingRange}
+                onRefresh={refreshBriefing}
+                onOpenPending={() => setTab("today")}
+                onOpenEmail={setOpenEmail}
+                onError={setApiError}
               />
-            </View>
-            <View style={styles.row}>
-              <Ionicons name="phone-portrait-outline" size={22} color="#20242a" />
-              <View style={styles.rowBody}>
-                <Text style={styles.rowTitle}>Android notification access</Text>
-                <Text style={styles.rowText}>
-                  {notificationAccessSupported
-                    ? notificationAccessEnabled
-                      ? "Enabled. New Android notifications will sync to EVE."
-                      : "Open Android settings and enable EVE under Notification access."
-                    : Platform.OS === "android"
-                      ? "Requires a custom Android dev build, not Expo Go."
-                      : "Only Android allows apps to read notifications from other apps."}
-                </Text>
-              </View>
-              {notificationAccessSupported ? (
-                <Pressable style={styles.inlineButton} onPress={openNotificationAccessSettings}>
-                  <Text style={styles.inlineButtonText}>
-                    {notificationAccessEnabled ? "Settings" : "Enable"}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </View>
-
-            <SectionHeader title="Captured notifications" note={`${deviceNotifications.length} synced`} />
-            {deviceNotifications.length === 0 ? (
-              <Text style={styles.empty}>No Android notifications captured yet.</Text>
-            ) : (
-              deviceNotifications.slice(0, 10).map((entry) => (
-                <View key={entry.id} style={styles.row}>
-                  <Text style={styles.auditTime}>{formatTime(entry.receivedAt)}</Text>
-                  <View style={styles.rowBody}>
-                    <Text style={styles.rowTitle}>{entry.title || entry.appName || entry.packageName}</Text>
-                    <Text style={styles.rowText}>{entry.body || entry.packageName}</Text>
-                  </View>
-                </View>
-              ))
             )}
-          </>
-        )}
-      </ScrollView>
+
+            {tab === "audit" && <AuditTab audit={audit} />}
+          </FadeSlideIn>
+        </ScrollView>
+      )}
+
+      {navVisible ? (
+        <BottomNav
+          tabs={NAV_TABS.map((item) =>
+            item.key === "today" && inboxNewCount > 0 ? { ...item, badge: true } : item,
+          )}
+          active={tab}
+          onSelect={(key) => setTab(key as Tab)}
+          onPressEve={() => setVoiceVisible(true)}
+          eveLabel="Talk to EVE"
+        />
+      ) : null}
+
+      <Sidebar
+        visible={sidebarOpen}
+        name={session.displayName}
+        email={session.email}
+        photoURL={session.photoURL}
+        onClose={() => setSidebarOpen(false)}
+        onNavigate={(destination) => {
+          setSidebarOpen(false);
+          setSettingsEntry(SIDEBAR_TO_SETTINGS[destination]);
+        }}
+        onSignOut={() => {
+          setSidebarOpen(false);
+          void logout();
+        }}
+      />
+
+      <ChatModal visible={chatVisible} onClose={() => setChatVisible(false)} onOpenVoice={() => {
+        setChatVisible(false);
+        setVoiceVisible(true);
+      }} />
+
+      {/* Read from the briefing rather than from the captured row, so approving
+          from inside the message updates the message you are still looking at. */}
+      <MailScreen
+        email={openEmail ? briefing.emails.find((item) => item.id === openEmail.id) ?? openEmail : null}
+        visible={openEmail !== null}
+        saving={saving}
+        onAction={(emailId, status) => void recordAction(emailId, status)}
+        onClose={() => setOpenEmail(null)}
+      />
+
+      <VoiceScreen visible={voiceVisible} onClose={() => setVoiceVisible(false)} />
     </SafeAreaView>
   );
 }
 
-async function apiFetch<T>(path: string, init: RequestInit = {}, token = tokenStore.current): Promise<T> {
+// Light wrapper around the shared apiFetch that adds a friendlier timeout
+// message — physical phones using localhost are the #1 source of timeouts.
+async function apiFetch<T>(
+  path: string,
+  init: RequestInit = {},
+  token: string | null = tokenStore.current,
+): Promise<T> {
   try {
     return await apiFetchClient<T>(path, init, token);
   } catch (error) {
@@ -947,787 +1000,21 @@ async function apiFetch<T>(path: string, init: RequestInit = {}, token = tokenSt
   }
 }
 
-function Permission(props: { icon: keyof typeof Ionicons.glyphMap; title: string; body: string }) {
-  return (
-    <View style={styles.permission}>
-      <Ionicons name={props.icon} size={22} color="#20242a" />
-      <View style={styles.permissionText}>
-        <Text style={styles.permissionTitle}>{props.title}</Text>
-        <Text style={styles.permissionBody}>{props.body}</Text>
-      </View>
-    </View>
-  );
-}
-
-function Metric(props: { value: number; label: string }) {
-  return (
-    <View style={styles.metric}>
-      <Text style={styles.metricValue}>{props.value}</Text>
-      <Text style={styles.metricLabel}>{props.label}</Text>
-    </View>
-  );
-}
-
-function SectionHeader(props: { title: string; note: string }) {
-  return (
-    <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>{props.title}</Text>
-      <Text style={styles.sectionNote}>{props.note}</Text>
-    </View>
-  );
-}
-
-function EmailCard(props: { email: BriefingEmail; selected: boolean; onPress: () => void }) {
-  return (
-    <Pressable style={[styles.emailCard, props.selected && styles.selectedEmailCard]} onPress={props.onPress}>
-      <View style={styles.emailTopline}>
-        <View style={styles.senderRow}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{initials(props.email.senderName)}</Text>
-          </View>
-          <View style={styles.senderText}>
-            <Text style={styles.senderName}>{props.email.senderName}</Text>
-            <Text style={styles.emailMeta}>
-              {formatTime(props.email.receivedAt)} - {props.email.senderEmail}
-            </Text>
-          </View>
-        </View>
-        <View style={[styles.status, statusStyle(props.email.status)]}>
-          <Text style={styles.statusText}>{props.email.status}</Text>
-        </View>
-      </View>
-      <Text style={styles.emailSubject}>{props.email.subject}</Text>
-      <Text style={styles.emailSummary}>{props.email.summary}</Text>
-      <View style={styles.scoreRow}>
-        <View style={styles.scoreTrack}>
-          <View style={[styles.scoreFill, { width: `${props.email.urgencyScore}%` }]} />
-        </View>
-        <Text style={styles.scoreText}>{props.email.urgencyScore}</Text>
-      </View>
-      <Text style={styles.emailMeta}>{props.email.urgencyReason}</Text>
-    </Pressable>
-  );
-}
-
-function ActionButton(props: {
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  tone: Tone;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable style={[styles.actionButton, actionStyle(props.tone)]} onPress={props.onPress}>
-      <Ionicons name={props.icon} size={17} color={actionTextColor(props.tone)} />
-      <Text style={[styles.actionText, { color: actionTextColor(props.tone) }]}>{props.label}</Text>
-    </Pressable>
-  );
-}
-
-function titleCase(value: string) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function googleLoginReturnURL() {
-  if (Platform.OS === "web") return WEB_GOOGLE_RETURN_URL;
-  return "eve://auth/google";
-}
-
-let cachedGoogleSignInModule: typeof import("@react-native-google-signin/google-signin") | null = null;
-let googleSignInProbed = false;
-let googleSignInAvailable = false;
-
-function probeNativeGoogleSignIn(): boolean {
-  if (googleSignInProbed) return googleSignInAvailable;
-  googleSignInProbed = true;
-  if (Platform.OS === "web" || IS_EXPO_GO) {
-    googleSignInAvailable = false;
-    return false;
-  }
-  const turboProxy = (globalThis as { __turboModuleProxy?: (name: string) => unknown }).__turboModuleProxy;
-  const turboModule = typeof turboProxy === "function" ? turboProxy("RNGoogleSignin") : null;
-  const legacyModule = (NativeModules as Record<string, unknown>).RNGoogleSignin;
-  if (!turboModule && !legacyModule) {
-    googleSignInAvailable = false;
-    return false;
-  }
-  try {
-    cachedGoogleSignInModule = require("@react-native-google-signin/google-signin");
-    googleSignInAvailable = true;
-  } catch {
-    googleSignInAvailable = false;
-  }
-  return googleSignInAvailable;
-}
-
-function nativeGoogleSignInSupported() {
-  return probeNativeGoogleSignIn();
-}
-
-async function loadNativeGoogleSignIn(): Promise<typeof import("@react-native-google-signin/google-signin")> {
-  if (!probeNativeGoogleSignIn() || !cachedGoogleSignInModule) {
-    throw new Error("Gmail login requires a development build with the Google Sign-In native module.");
-  }
-  return cachedGoogleSignInModule;
-}
-
-function googleErrorCode(error: unknown) {
-  if (typeof error === "object" && error && "code" in error) return String(error.code);
-  return "";
-}
-
-function tokenFromURL(value: string) {
-  try {
-    const url = new URL(value);
-    return url.searchParams.get("eve_token") || "";
-  } catch {
-    const match = value.match(/[?&]eve_token=([^&]+)/);
-    return match?.[1] ? decodeURIComponent(match[1]) : "";
-  }
-}
-
-function initials(name: string) {
-  return name
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-}
-
-function normalizePreferences(input: Partial<Preferences> | null | undefined): Preferences {
-  return {
-    ...DEFAULT_PREFERENCES,
-    ...(input || {}),
-    userId: input?.userId || DEFAULT_PREFERENCES.userId,
-    briefingTime: input?.briefingTime || DEFAULT_PREFERENCES.briefingTime,
-    pushEnabled:
-      typeof input?.pushEnabled === "boolean" ? input.pushEnabled : DEFAULT_PREFERENCES.pushEnabled,
-    timezone: input?.timezone || DEFAULT_PREFERENCES.timezone,
-  };
-}
-
-function normalizeSession(input: Session): Session {
-  return {
-    ...input,
-    email: input.email || null,
-    googleConnected: Boolean(input.googleConnected),
-    connectionMode: input.connectionMode === "google" ? "google" : "none",
-    integrationMode: input.integrationMode || {
-      google: "not-configured",
-      llm: "local",
-      emailSending: "audit-only",
+function makeStyles({ palette }: ThemeValue) {
+  return StyleSheet.create({
+    safeArea: {
+      flex: 1,
+      backgroundColor: palette.background,
     },
-    preferences: normalizePreferences(input.preferences),
-  };
-}
-
-function normalizeBriefing(input: Briefing): Briefing {
-  return {
-    ...EMPTY_BRIEFING,
-    ...input,
-    stats: {
-      ...EMPTY_BRIEFING.stats,
-      ...(input.stats || {}),
+    content: {
+      padding: 18,
+      // Clears the floating nav bar, which sits above this ScrollView rather
+      // than inside it — without the pad, the last card hides behind it.
+      paddingBottom: BOTTOM_NAV_CLEARANCE,
     },
-    emails: Array.isArray(input.emails) ? input.emails : [],
-    calendar: Array.isArray(input.calendar) ? input.calendar : [],
-  };
+    // Messages fills the frame instead of scrolling with the page: it owns a
+    // scroller and a keyboard-avoiding composer, neither of which survives
+    // being nested inside another ScrollView.
+    flex: { flex: 1 },
+  });
 }
-
-function formatTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "--:--";
-
-  return new Intl.DateTimeFormat("en", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-function statusStyle(status: EmailStatus) {
-  if (status === "approved") return styles.approvedStatus;
-  if (status === "rejected") return styles.rejectedStatus;
-  return styles.pendingStatus;
-}
-
-function actionStyle(tone: Tone) {
-  if (tone === "green") return styles.greenAction;
-  if (tone === "coral") return styles.coralAction;
-  return styles.neutralAction;
-}
-
-function actionTextColor(tone: Tone) {
-  if (tone === "green") return "#0b6049";
-  if (tone === "coral") return "#8b321f";
-  return "#20242a";
-}
-
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "#fffdf8",
-  },
-  connectScreen: {
-    flex: 1,
-    justifyContent: "center",
-    padding: 24,
-    gap: 14,
-  },
-  mark: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: "#20242a",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 10,
-  },
-  markText: {
-    color: "#fffdf8",
-    fontSize: 18,
-    fontWeight: "800",
-  },
-  connectTitle: {
-    color: "#20242a",
-    fontSize: 34,
-    lineHeight: 36,
-    fontWeight: "800",
-  },
-  connectCopy: {
-    color: "#676d73",
-    fontSize: 15,
-    lineHeight: 23,
-    marginBottom: 16,
-  },
-  permission: {
-    flexDirection: "row",
-    gap: 12,
-    paddingVertical: 13,
-    borderBottomWidth: 1,
-    borderBottomColor: "#ded8ca",
-  },
-  permissionText: {
-    flex: 1,
-  },
-  permissionTitle: {
-    color: "#20242a",
-    fontWeight: "800",
-  },
-  permissionBody: {
-    color: "#676d73",
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 2,
-  },
-  authSwitch: {
-    minHeight: 44,
-    borderRadius: 8,
-    backgroundColor: "#ebe7dc",
-    flexDirection: "row",
-    padding: 4,
-    marginBottom: 4,
-  },
-  authSwitchButton: {
-    flex: 1,
-    borderRadius: 6,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  activeAuthSwitch: {
-    backgroundColor: "#20242a",
-  },
-  authSwitchText: {
-    color: "#676d73",
-    fontWeight: "800",
-  },
-  activeAuthSwitchText: {
-    color: "#fffdf8",
-  },
-  authInput: {
-    minHeight: 48,
-    borderWidth: 1,
-    borderColor: "#ded8ca",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    color: "#20242a",
-    backgroundColor: "#fffdf8",
-    fontWeight: "700",
-  },
-  primaryButton: {
-    minHeight: 48,
-    borderRadius: 8,
-    backgroundColor: "#20242a",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    marginTop: 16,
-  },
-  primaryButtonText: {
-    color: "#fffdf8",
-    fontWeight: "800",
-  },
-  disabledButton: {
-    opacity: 0.5,
-  },
-  googleButton: {
-    minHeight: 48,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#ded8ca",
-    backgroundColor: "#fffdf8",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-  },
-  googleButtonText: {
-    color: "#20242a",
-    fontWeight: "800",
-  },
-  quietFullButton: {
-    minHeight: 44,
-    borderRadius: 8,
-    backgroundColor: "#ebe7dc",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  quietButtonText: {
-    color: "#20242a",
-    fontWeight: "800",
-  },
-  errorText: {
-    color: "#8b321f",
-    backgroundColor: "#f7e4dd",
-    borderRadius: 8,
-    padding: 10,
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  debugText: {
-    color: "#676d73",
-    fontSize: 12,
-    lineHeight: 17,
-  },
-  header: {
-    backgroundColor: "#fffdf8",
-    borderBottomWidth: 1,
-    borderBottomColor: "#ded8ca",
-  },
-  headerRow: {
-    paddingHorizontal: 18,
-    paddingTop: 12,
-    paddingBottom: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  brandRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  smallMark: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#20242a",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  smallMarkText: {
-    color: "#fffdf8",
-    fontSize: 14,
-    fontWeight: "800",
-  },
-  appName: {
-    color: "#20242a",
-    fontSize: 20,
-    fontWeight: "800",
-  },
-  headerMeta: {
-    color: "#676d73",
-    fontSize: 12,
-  },
-  pendingPill: {
-    minHeight: 32,
-    borderRadius: 16,
-    backgroundColor: "#dff4eb",
-    paddingHorizontal: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-  },
-  dot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: "#1d9e75",
-  },
-  pendingText: {
-    color: "#0b6049",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  tabs: {
-    flexDirection: "row",
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingBottom: 10,
-  },
-  tab: {
-    flex: 1,
-    minHeight: 38,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  activeTab: {
-    backgroundColor: "#20242a",
-  },
-  tabText: {
-    color: "#676d73",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  activeTabText: {
-    color: "#fffdf8",
-  },
-  content: {
-    padding: 18,
-    paddingBottom: 36,
-    gap: 0,
-  },
-  promptPanel: {
-    minHeight: 52,
-    borderWidth: 1,
-    borderColor: "#ded8ca",
-    borderRadius: 8,
-    backgroundColor: "#fffdf8",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    padding: 8,
-    marginBottom: 12,
-  },
-  promptInput: {
-    flex: 1,
-    minHeight: 38,
-    color: "#20242a",
-    paddingHorizontal: 8,
-  },
-  promptButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 8,
-    backgroundColor: "#20242a",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  answerPanel: {
-    borderWidth: 1,
-    borderColor: "#cfded8",
-    borderRadius: 8,
-    backgroundColor: "#f4fbf8",
-    padding: 14,
-    marginBottom: 14,
-  },
-  answerHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 8,
-  },
-  answerTitle: {
-    color: "#20242a",
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  answerSource: {
-    color: "#0b6049",
-    fontSize: 11,
-    fontWeight: "800",
-    textTransform: "uppercase",
-  },
-  answerText: {
-    color: "#20242a",
-    fontSize: 14,
-    lineHeight: 21,
-  },
-  metrics: {
-    flexDirection: "row",
-    gap: 10,
-    marginBottom: 20,
-  },
-  metric: {
-    flex: 1,
-    minHeight: 74,
-    borderWidth: 1,
-    borderColor: "#ded8ca",
-    borderRadius: 8,
-    padding: 12,
-    backgroundColor: "#fbf8f1",
-  },
-  metricValue: {
-    color: "#20242a",
-    fontSize: 24,
-    fontWeight: "800",
-  },
-  metricLabel: {
-    color: "#676d73",
-    fontSize: 12,
-    lineHeight: 15,
-    marginTop: 5,
-  },
-  toolbar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  iconButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 8,
-    backgroundColor: "#ebe7dc",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sectionHeader: {
-    marginTop: 22,
-    marginBottom: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-  },
-  sectionTitle: {
-    color: "#20242a",
-    fontSize: 17,
-    fontWeight: "800",
-  },
-  sectionNote: {
-    color: "#676d73",
-    fontSize: 12,
-  },
-  emailCard: {
-    borderWidth: 1,
-    borderColor: "#ded8ca",
-    borderRadius: 8,
-    padding: 14,
-    marginBottom: 10,
-    backgroundColor: "#fffdf8",
-    gap: 9,
-  },
-  selectedEmailCard: {
-    borderColor: "#1d9e75",
-  },
-  emailTopline: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  senderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    flex: 1,
-  },
-  avatar: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: "#e4eef9",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  avatarText: {
-    color: "#174a7f",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  senderText: {
-    flex: 1,
-  },
-  senderName: {
-    color: "#20242a",
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  emailMeta: {
-    color: "#676d73",
-    fontSize: 12,
-    lineHeight: 17,
-  },
-  status: {
-    minWidth: 82,
-    borderRadius: 999,
-    paddingVertical: 5,
-    paddingHorizontal: 8,
-    alignItems: "center",
-  },
-  pendingStatus: {
-    backgroundColor: "#f4ead5",
-  },
-  approvedStatus: {
-    backgroundColor: "#dff4eb",
-  },
-  rejectedStatus: {
-    backgroundColor: "#f7e4dd",
-  },
-  statusText: {
-    color: "#20242a",
-    fontSize: 11,
-    fontWeight: "800",
-  },
-  emailSubject: {
-    color: "#20242a",
-    fontWeight: "800",
-  },
-  emailSummary: {
-    color: "#676d73",
-    fontSize: 13,
-    lineHeight: 19,
-  },
-  scoreRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  scoreTrack: {
-    flex: 1,
-    height: 7,
-    borderRadius: 999,
-    backgroundColor: "#ebe7dc",
-    overflow: "hidden",
-  },
-  scoreFill: {
-    height: 7,
-    borderRadius: 999,
-    backgroundColor: "#1d9e75",
-  },
-  scoreText: {
-    width: 34,
-    textAlign: "right",
-    color: "#676d73",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  draftPanel: {
-    borderWidth: 1,
-    borderColor: "#ded8ca",
-    borderRadius: 8,
-    padding: 14,
-    backgroundColor: "#fbf8f1",
-    marginTop: 12,
-  },
-  draftText: {
-    color: "#20242a",
-    fontSize: 14,
-    lineHeight: 22,
-  },
-  editor: {
-    minHeight: 138,
-    borderWidth: 1,
-    borderColor: "#ded8ca",
-    borderRadius: 8,
-    padding: 12,
-    backgroundColor: "#fffdf8",
-    color: "#20242a",
-    textAlignVertical: "top",
-  },
-  actionRow: {
-    flexDirection: "row",
-    gap: 8,
-    marginTop: 12,
-  },
-  actionRowTwo: {
-    flexDirection: "row",
-    gap: 8,
-    marginTop: 12,
-  },
-  actionButton: {
-    flex: 1,
-    minHeight: 44,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-    gap: 6,
-    paddingHorizontal: 8,
-  },
-  greenAction: {
-    backgroundColor: "#dff4eb",
-  },
-  coralAction: {
-    backgroundColor: "#f7e4dd",
-  },
-  neutralAction: {
-    backgroundColor: "#ebe7dc",
-  },
-  actionText: {
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  row: {
-    flexDirection: "row",
-    gap: 12,
-    paddingVertical: 13,
-    borderBottomWidth: 1,
-    borderBottomColor: "#ded8ca",
-    alignItems: "center",
-  },
-  rowBody: {
-    flex: 1,
-  },
-  rowTitle: {
-    color: "#20242a",
-    fontWeight: "800",
-  },
-  rowText: {
-    color: "#676d73",
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 2,
-  },
-  inlineButton: {
-    minHeight: 36,
-    borderRadius: 8,
-    backgroundColor: "#ebe7dc",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 12,
-  },
-  inlineButtonText: {
-    color: "#20242a",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  eventTime: {
-    width: 58,
-    color: "#2b74c7",
-    fontWeight: "800",
-  },
-  auditTime: {
-    width: 64,
-    color: "#676d73",
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  empty: {
-    color: "#676d73",
-    textAlign: "center",
-    paddingVertical: 28,
-  },
-  timeInput: {
-    width: 112,
-    minHeight: 42,
-    borderWidth: 1,
-    borderColor: "#ded8ca",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    color: "#20242a",
-    marginTop: 8,
-    fontWeight: "800",
-  },
-});

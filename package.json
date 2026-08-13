@@ -7,6 +7,7 @@
   "packageManager": "pnpm@10.13.1",
   "workspaces": [
     "apps/mobile",
+    "apps/orb-test",
     "services/api-node"
   ],
   "scripts": {
@@ -22,7 +23,9 @@
     "lint:fix": "pnpm exec eslint --fix .",
     "format": "pnpm exec prettier --write .",
     "format:check": "pnpm exec prettier --check .",
-    "preview": "node apps/preview/server.mjs"
+    "preview": "node apps/preview/server.mjs",
+    "orb:dev": "pnpm --filter @eve/orb-test dev",
+    "orb:capture": "pnpm --filter @eve/orb-test capture"
   },
   "dependencies": {
     "eas-cli": "^20.0.0"

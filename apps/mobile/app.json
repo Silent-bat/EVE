@@ -3,17 +3,30 @@
     "name": "EVE",
     "slug": "eve",
     "version": "0.1.0",
-    "entryPoint": "./index.ts",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "scheme": "eve",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#f3effa"
+    },
     "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.eve.agent"
+      "bundleIdentifier": "com.eve.agent",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "EVE listens when you tap the mic so you can talk to your agent."
+      }
     },
     "android": {
-      "package": "com.eve.agent"
+      "package": "com.eve.agent",
+      "permissions": ["RECORD_AUDIO"],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#f3effa"
+      }
     },
     "plugins": [
       [
@@ -22,7 +35,13 @@
           "iosUrlScheme": "com.googleusercontent.apps.458142706595-u27hbqdaa4d9icnhv1gfm3ti3pfekf9h"
         }
       ],
-      "./plugins/withAndroidNotificationListener"
+      "./plugins/withAndroidNotificationListener",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "EVE listens when you tap the mic so you can talk to your agent."
+        }
+      ]
     ],
     "extra": {
       "eas": {

@@ -126,9 +126,12 @@ export async function findUserByEmail(email) {
  *
  * @param {string} email
  * @param {Record<string, unknown>} tokenPayload
+ * @param {{ name?: string | null, picture?: string | null } | null} [profile]
+ *   The rest of the Google profile. Optional so the password paths and older
+ *   callers keep working — without it the account simply has no photo.
  * @returns {Promise<string>}
  */
-export async function ensureGoogleAuthUser(email, tokenPayload) {
+export async function ensureGoogleAuthUser(email, tokenPayload, profile = null) {
   const normalized = normalizeEmail(email);
   if (!normalized) throw httpError(400, "google account did not return a verified email");
 
@@ -149,7 +152,27 @@ export async function ensureGoogleAuthUser(email, tokenPayload) {
   state.users[userID].email = normalized;
   state.users[userID].googleConnected = true;
   state.users[userID].connectionMode = "google";
-  state.users[userID].googleTokens = tokenPayload;
+  // Only overwrite when Google actually sent one. A re-login that omits the
+  // photo shouldn't blank the avatar the user already had.
+  if (profile?.name) state.users[userID].displayName = profile.name;
+  if (profile?.picture) state.users[userID].photoURL = profile.picture;
+  // Merge, don't replace. Google does NOT always re-issue a refresh
+  // token on re-login (especially when the user already has an active
+  // OAuth grant for this app). The previous logic wiped any existing
+  // refresh_token whenever the new payload didn't carry one, which
+  // forced the user to log out + back in every time the access token
+  // expired. Preserve the prior refresh_token when the new payload
+  // omits it.
+  const previous = state.users[userID].googleTokens || {};
+  state.users[userID].googleTokens = {
+    ...previous,
+    ...tokenPayload,
+    refresh_token: tokenPayload.refresh_token || previous.refresh_token,
+    // A prior connection may have been flagged as needing re-auth. This IS
+    // that re-auth, so clear the flag — spreading `previous` would otherwise
+    // carry it forward and leave a working connection marked broken.
+    needsReconnect: false,
+  };
   return userID;
 }
 
@@ -180,8 +203,14 @@ export async function createSession(userID) {
 }
 
 /**
- * Resolve the user ID for a request. Throws 401 in Postgres mode if no valid
- * token; in JSON mode allows the X-EVE-User-ID header fallback.
+ * Resolve the user ID for a request. Throws 401 unless a valid session token is
+ * present — except in local development on JSON storage, where the
+ * X-EVE-User-ID header is accepted as a convenience.
+ *
+ * That exception is gated on `isProduction` and not only on storage mode. The
+ * header is caller-supplied, so wherever it is honoured the API has no
+ * authentication at all and any user's data is one header away; a deployment
+ * that forgets to set DATABASE_URL should fail closed rather than silently open.
  *
  * @param {import("node:http").IncomingMessage} request
  */
@@ -189,7 +218,7 @@ export async function requireUserID(request) {
   const session = await optionalSession(request);
   if (session) return session.userID;
   const pool = getPool();
-  if (!pool) {
+  if (!pool && !config.isProduction) {
     const header = request.headers["x-eve-user-id"];
     if (typeof header === "string") return header;
     if (Array.isArray(header) && header[0]) return header[0];

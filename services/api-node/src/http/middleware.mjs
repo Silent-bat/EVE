@@ -17,7 +17,9 @@ const baseSecurityHeaders = Object.freeze({
   "Referrer-Policy": "strict-origin-when-cross-origin",
   "Cross-Origin-Resource-Policy": "cross-origin",
   "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
-  // restrictive default; Google OAuth callback HTML uses inline script so we relax that one route at write time
+  // No route serves script, and none needs to: the Google OAuth callback used to
+  // carry an inline redirect, which this CSP was silently blocking anyway, and it
+  // is now a 302 with no document at all. So this stays strict everywhere.
   "Content-Security-Policy":
     "default-src 'none'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'",
 });

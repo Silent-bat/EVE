@@ -1,0 +1,242 @@
+:root {
+  color-scheme: dark;
+  --bg: #04040a;
+  --panel: #0b0b16;
+  --line: #1e1e30;
+  --text: #e7e7f2;
+  --muted: #8a8aa6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+}
+
+a {
+  color: inherit;
+}
+
+/* -- canvas stage -------------------------------------------------------- */
+
+.stage {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  background: #04040a;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.stage--bare {
+  position: fixed;
+  inset: 0;
+  border-radius: 0;
+}
+
+.orb-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.orb-error {
+  position: absolute;
+  inset: 12px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  background: #2a0d12;
+  border: 1px solid #6d2230;
+  border-radius: 10px;
+  color: #ffc9d2;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.stage--ref {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  border: 1px solid var(--line);
+}
+
+.stage--ref img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.stage--ref figcaption {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* -- index --------------------------------------------------------------- */
+
+.home {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  height: 100%;
+  padding: 24px;
+}
+
+.home__head h1 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.home__head p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.home__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  min-height: 340px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  text-decoration: none;
+}
+
+.card:hover {
+  border-color: #33334f;
+}
+
+.card__title {
+  margin: 0 0 2px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.card__note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* -- detail view --------------------------------------------------------- */
+
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+  padding: 20px 24px 24px;
+}
+
+.view__bar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.view__back {
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.view__back:hover {
+  color: var(--text);
+}
+
+.view__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.view__note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.btn {
+  margin-left: auto;
+  padding: 8px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: #33334f;
+}
+
+.split {
+  display: flex;
+  gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.control__label {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.control__label b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.control input {
+  width: 100%;
+  accent-color: #7c6cf0;
+}

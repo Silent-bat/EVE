@@ -6,8 +6,9 @@
  * - localDraft: opinionated reply template for known categories
  * - localMessageAnalysis: assembles the above into the shape the briefing uses
  * - normalizeMessageAnalysis: clamps an LLM-returned analysis to safe bounds
- * - sanitizePlainText: drop excess whitespace and clamp length
+ * - sanitizePlainText: strip stray markup, drop excess whitespace, clamp length
  */
+import { stripHTML } from "../google/api.mjs";
 
 /**
  * @param {{ subject: string, body: string }} message
@@ -109,10 +110,11 @@ export function clampNumber(value, min, max, fallback) {
  * @param {number} maxLength
  */
 export function sanitizePlainText(value, maxLength) {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLength);
+  // Belt-and-braces `stripHTML`: bodies are already decoded to plain text
+  // upstream, but this is the last gate before a summary is stored and shown,
+  // and a summary that leaks markup is the single most visible way for this to
+  // go wrong. Also covers the LLM echoing markup back from a body it was given.
+  return stripHTML(String(value || "")).slice(0, maxLength);
 }
 
 /**

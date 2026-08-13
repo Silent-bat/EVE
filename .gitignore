@@ -8,6 +8,22 @@
 node_modules/
 .npm-cache/
 .expo/
+.next/
+*.tsbuildinfo
 dist/
 coverage/
 tmp/
+
+# Local Codex/agent development metadata.
+.agents/
+.claude/skills/
+apps/mobile/.agents/
+apps/mobile/.claude/
+**/skills-lock.json
+
+# Runtime/test state and local Android signing material.
+services/api-node/tests/.eve-test-data/
+apps/mobile/android/app/debug.keystore
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat

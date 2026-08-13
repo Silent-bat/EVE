@@ -5,13 +5,18 @@
  * mutates. We keep the shape here and provide narrow helpers so call sites
  * stop reaching into the bag directly.
  *
+ * `sessions` and `oauthStates` are required, not optional: `emptyState` seeds
+ * both, and `loadFromJSON` defaults both when a persisted file predates them.
+ * Marking them optional only pushed a null check onto every call site that
+ * reads a session, none of which can actually observe them missing.
+ *
  * @typedef {Object} StateShape
  * @property {Record<string, any>} users
  * @property {Record<string, Record<string, any>>} briefings
  * @property {Record<string, any[]>} audit
  * @property {Record<string, any[]>} deviceNotifications
- * @property {Record<string, any>} [sessions]
- * @property {Record<string, any>} [oauthStates]
+ * @property {Record<string, any>} sessions
+ * @property {Record<string, any>} oauthStates
  */
 
 export const LOCAL_USER_ID = "local-user";
@@ -44,7 +49,10 @@ export function ensureUserIn(target, userID) {
     googleConnected: false,
     connectionMode: "none",
     preferences: normalizePreferences({ userId: userID }),
+    proactiveInbox: [],
   };
+  // Backfill for users created before the proactive inbox existed.
+  target.users[userID].proactiveInbox ||= [];
   target.briefings[userID] ||= {};
   target.audit[userID] ||= [];
   target.deviceNotifications ||= {};
@@ -102,23 +110,60 @@ export function sessionPayload(state, userID, integrationMode) {
   return {
     userId: userID,
     email: user.email || null,
-    googleConnected: Boolean(user.googleConnected),
+    // The header avatar reads these. Both are optional — a password account has
+    // neither, and a Google account without a photo has only the name.
+    displayName: user.displayName || null,
+    photoURL: user.photoURL || null,
+    googleConnected: isGoogleUsable(user),
     connectionMode: user.connectionMode || "none",
+    // Whether there is a password to change. A Google-only account has none, and
+    // the account page hides the control rather than offering one that can only
+    // fail. Never the hash itself — only whether one exists.
+    hasPassword: Boolean(user.passwordHash),
     integrationMode,
     preferences: user.preferences || normalizePreferences({ userId: userID }),
   };
 }
 
 /**
- * @param {{ userId?: string, briefingTime?: string, pushEnabled?: boolean, timezone?: string }} input
+ * Is this user's Google connection actually usable right now?
+ *
+ * The client gates its whole signed-in experience on `googleConnected`, while
+ * every server-side Gmail path additionally requires `connectionMode` to be
+ * "google" and an access token to exist. When those disagree the app shows a
+ * connected account whose mail never loads — the reads just return empty. So
+ * report the connection the way the readers actually evaluate it, rather than
+ * echoing a stored flag that can outlive the tokens behind it.
+ *
+ * @param {{ googleConnected?: boolean, connectionMode?: string, googleTokens?: any }} user
+ */
+export function isGoogleUsable(user) {
+  return Boolean(
+    user.googleConnected &&
+      user.connectionMode === "google" &&
+      user.googleTokens?.access_token &&
+      !user.googleTokens?.needsReconnect,
+  );
+}
+
+/**
+ * Shape and validate the user-facing preference fields. The `proactive`
+ * sub-object is passed through unmodified — the proactive module owns its
+ * own schema and normalizes on read (and the HTTP layer validates on write).
+ *
+ * @param {{ userId?: string, briefingTime?: string, pushEnabled?: boolean, timezone?: string, proactive?: unknown }} input
  */
 export function normalizePreferences(input) {
-  return {
+  const out = {
     userId: input.userId || LOCAL_USER_ID,
     briefingTime: validTime(input.briefingTime) ? input.briefingTime : "08:00",
     pushEnabled: typeof input.pushEnabled === "boolean" ? input.pushEnabled : true,
     timezone: input.timezone || "Africa/Douala",
   };
+  if (input.proactive !== undefined) {
+    /** @type {any} */ (out).proactive = input.proactive;
+  }
+  return out;
 }
 
 /**

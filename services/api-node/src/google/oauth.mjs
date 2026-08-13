@@ -116,6 +116,7 @@ export async function exchangeGoogleCode(code) {
 
   const response = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
+    signal: AbortSignal.timeout(config.outboundTimeoutMs),
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       code,
@@ -144,7 +145,14 @@ export async function fetchGoogleProfile(accessToken) {
   if (!payload.email || payload.email_verified === false) {
     throw httpError(400, "google account did not return a verified email");
   }
-  return { email: payload.email };
+  // `name` and `picture` are optional on the userinfo response — a Workspace
+  // account with no photo returns neither — so both normalize to null rather
+  // than undefined, and the client falls back to initials.
+  return {
+    email: payload.email,
+    name: typeof payload.name === "string" && payload.name.trim() ? payload.name.trim() : null,
+    picture: typeof payload.picture === "string" && payload.picture ? payload.picture : null,
+  };
 }
 
 /**
@@ -158,6 +166,9 @@ export async function fetchGoogleProfile(accessToken) {
 export async function googleJSON(url, accessToken, init = {}) {
   const response = await fetch(url, {
     ...init,
+    // Node's fetch waits indefinitely by default, so a stalled connection to
+    // Google would hang the request past any client timeout.
+    signal: init.signal ?? AbortSignal.timeout(config.outboundTimeoutMs),
     headers: {
       Authorization: `Bearer ${accessToken}`,
       ...(init.body ? { "Content-Type": "application/json" } : {}),
@@ -165,6 +176,13 @@ export async function googleJSON(url, accessToken, init = {}) {
     },
   });
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error?.message || "google api request failed");
+  if (!response.ok) {
+    const message = payload.error?.message || "google api request failed";
+    // An expired or revoked token is the client's cue to sign in again, so
+    // keep it a 401 rather than letting it surface as a server error the
+    // app can only report as "something went wrong". Anything else really
+    // is upstream failing, which is a gateway error and not our fault.
+    throw httpError(response.status === 401 || response.status === 403 ? 401 : 502, message);
+  }
   return payload;
 }

@@ -96,6 +96,16 @@ export async function apiFetch<T>(
     const text = await response.text();
     const payload = text ? safeJSONParse(text) : null;
     if (!response.ok) {
+      // A 401 on a request that carried a token means that token is dead —
+      // expired, revoked, or issued by a database that has since been reset.
+      // Leaving it in storage strands the app: every screen keeps retrying
+      // with the same rejected credential and shows "authentication required"
+      // with no route back to sign-in. Drop it so the app falls back to the
+      // login screen. Requests without a token (login, signup) are excluded,
+      // since a 401 there just means bad credentials.
+      if (response.status === 401 && token) {
+        void tokenStore.clear();
+      }
       const errField =
         payload && typeof payload === "object" && "error" in payload
           ? (payload as { error?: unknown }).error

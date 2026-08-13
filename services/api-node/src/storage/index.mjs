@@ -64,6 +64,41 @@ export async function save() {
 }
 
 /**
+ * Erase every trace of a user: the in-memory record, all their per-user
+ * collections, their sessions, and their rows in Postgres.
+ *
+ * Deliberately not a soft delete. The account-deletion control in the app tells
+ * the user their data is removed, so it has to be, including the Google tokens
+ * — leaving those behind would keep a revoked account readable.
+ *
+ * Sessions are dropped before the user so that a request racing this one can't
+ * re-create the record it is authenticated against.
+ *
+ * @param {string} userID
+ */
+export async function purgeUser(userID) {
+  for (const [tokenHash, session] of Object.entries(state.sessions || {})) {
+    if (session?.userID === userID) delete state.sessions[tokenHash];
+  }
+  for (const [key, entry] of Object.entries(state.oauthStates || {})) {
+    if (entry?.userID === userID) delete state.oauthStates[key];
+  }
+  delete state.users[userID];
+  delete state.briefings[userID];
+  delete state.audit[userID];
+  if (state.deviceNotifications) delete state.deviceNotifications[userID];
+
+  const pool = getPool();
+  if (pool) {
+    // auth_sessions, app_state, and device_notifications all reference
+    // users(id) `on delete cascade`, so the one delete takes the rest with it.
+    await pool.query("delete from users where id = $1", [userID]);
+    return;
+  }
+  await saveToJSON(state);
+}
+
+/**
  * @returns {Promise<boolean>}
  */
 export async function isDatabaseConnected() {
