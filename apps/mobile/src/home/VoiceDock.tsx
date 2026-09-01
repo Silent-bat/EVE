@@ -14,20 +14,19 @@
  * route, and the text goes into the live session over `sendText`. Her reply
  * arrives as streamed transcript plus 24kHz PCM, which `useSpeaker` plays.
  *
- * It is deliberately the same path the voice screen uses, and worth being plain
- * about why it isn't a true duplex stream: nothing installed here can stream PCM
- * up to the model, so a turn is a recorded clip transcribed and sent, not live
- * audio. The difference you can feel is about a second of latency after you stop
- * speaking. The difference you can't is that barge-in doesn't work mid-answer —
- * she has to finish before the mic reopens.
+ * It is deliberately the same path the voice screen uses. Nothing installed
+ * here streams PCM directly to the model, so each turn is a recorded clip that
+ * is transcribed and sent, with about a second of latency after you stop. The
+ * microphone remains armed during her answer with an echo-resistant gate, so a
+ * foreground voice can interrupt her mid-sentence.
  *
  * ## Why she doesn't answer herself
  *
- * The mic is only armed while the session is idle and the speaker is silent.
- * Everything else — connecting, thinking, speaking — holds it closed, which is
- * what stops her voice from being heard as your next question. `Pause` closes
- * both the mic and the socket, because a session held open costs something and
- * a paused assistant should not be quietly billing for a connection.
+ * The mic is armed whenever the session is connected, including while EVE is
+ * speaking. The playback gate and voice-communication input keep her output
+ * from becoming the next question; a clear foreground voice interrupts her.
+ * `Pause` closes both the mic and the socket, because a paused assistant should
+ * not be quietly billing for a connection.
  */
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useMemo, useState } from "react";
@@ -61,14 +60,21 @@ export function VoiceDock({
   const live = useGeminiLive({
     enabled: !paused,
     onError,
-    onAudioResponse: speaker.play,
+    onAudioChunk: speaker.pushChunk,
+    onAudioComplete: speaker.finish,
   });
 
-  // Armed only in the gap between turns. See the docblock — this is the whole
-  // reason she doesn't hear her own answer and reply to it. `busy` rather than
-  // `playing`: the audio takes a moment to reach the player, and gating on
-  // `playing` reopened the mic during exactly that moment.
-  const ready = live.status === "idle" && !speaker.busy && !sending;
+  const onSpeechStart = useCallback(() => {
+    if (speaker.busy) {
+      speaker.stop();
+      live.interrupt();
+    }
+  }, [live, speaker]);
+
+  // Keep the mic armed during EVE's answer. The detector's playback gate and
+  // Android voice-communication input suppress the speaker echo, while a real
+  // foreground voice stops the player immediately.
+  const ready = live.status !== "connecting" && live.status !== "error";
 
   const onUtterance = useCallback(
     async (clip: { audio: string; mimeType: string }) => {
@@ -96,6 +102,9 @@ export function VoiceDock({
     active: !paused && ready,
     onUtterance,
     onError,
+    onSpeechStart,
+    speakerBusy: speaker.busy,
+    speakerLevel: speaker.level,
   });
 
   const blocked = listen.phase === "blocked";
@@ -113,11 +122,8 @@ export function VoiceDock({
         ? "listening"
         : "idle";
 
-  /* Whichever of the two is actually making sound. `ready` above closes the mic
-     for the whole of EVE's turn, so `listen.level` is flat zero while she talks —
-     passing it unconditionally left the orb sitting perfectly still through the
-     one moment it most obviously should move. The speaker measures its own
-     output; see useSpeaker's level. */
+  /* Whichever of the two is actually making sound. The speaker measures its own
+     output while EVE talks; see useSpeaker's level. */
   const level = field === "speaking" ? speaker.level : listen.level;
 
   // The last thing said, whoever said it. One line, because the dock sits above
@@ -128,13 +134,7 @@ export function VoiceDock({
     <View style={styles.card}>
       <View style={styles.row}>
         <View style={styles.fieldSlot}>
-          <ParticleField
-            state={field}
-            level={level}
-            size={FIELD}
-            count={18}
-            backdrop={palette.surface}
-          />
+          <ParticleField state={field} level={level} size={FIELD} count={18} backdrop={palette.surface} />
         </View>
 
         <View style={styles.copy}>

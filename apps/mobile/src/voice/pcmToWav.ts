@@ -20,6 +20,9 @@ import * as FileSystem from "expo-file-system/legacy";
 const OUTPUT_SAMPLE_RATE = 24000;
 const OUTPUT_CHANNELS = 1;
 const OUTPUT_BITS_PER_SAMPLE = 16;
+const MAX_PCM_BYTES = 4 * 1024 * 1024;
+const MAX_CHUNKS = 4096;
+let fileSequence = 0;
 
 /**
  * Milliseconds per envelope frame.
@@ -53,12 +56,24 @@ export type SpokenTurn = {
  * responsible for deleting the file when done (or just let cache GC handle it).
  */
 export async function writePcmChunksAsWav(chunksBase64: string[]): Promise<SpokenTurn | null> {
-  if (chunksBase64.length === 0) return null;
+  if (chunksBase64.length === 0 || chunksBase64.length > MAX_CHUNKS || !FileSystem.cacheDirectory)
+    return null;
 
   // Decode every chunk to bytes and concatenate. Doing it in one pass
   // keeps memory bounded — short voice replies are <1MB.
-  const decoded = chunksBase64.map(decodeBase64);
-  const totalBytes = decoded.reduce((sum, chunk) => sum + chunk.length, 0);
+  const decoded: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    for (const encoded of chunksBase64) {
+      if (!isBase64(encoded)) return null;
+      const chunk = decodeBase64(encoded);
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_PCM_BYTES) return null;
+      decoded.push(chunk);
+    }
+  } catch {
+    return null;
+  }
   if (totalBytes === 0) return null;
   const pcm = new Uint8Array(totalBytes);
   let offset = 0;
@@ -70,7 +85,7 @@ export async function writePcmChunksAsWav(chunksBase64: string[]): Promise<Spoke
   const envelope = envelopeOf(pcm);
 
   const wav = wrapInWavHeader(pcm);
-  const path = `${FileSystem.cacheDirectory}eve-voice-${Date.now()}.wav`;
+  const path = `${FileSystem.cacheDirectory}eve-voice-${Date.now()}-${fileSequence++}.wav`;
   await FileSystem.writeAsStringAsync(path, encodeBase64(wav), {
     encoding: FileSystem.EncodingType.Base64,
   });
@@ -141,8 +156,8 @@ function wrapInWavHeader(pcm: Uint8Array): Uint8Array {
 
   // fmt subchunk
   writeAscii(out, 12, "fmt ");
-  view.setUint32(16, 16, true);              // subchunk size for PCM
-  view.setUint16(20, 1, true);               // audio format: PCM
+  view.setUint32(16, 16, true); // subchunk size for PCM
+  view.setUint16(20, 1, true); // audio format: PCM
   view.setUint16(22, OUTPUT_CHANNELS, true);
   view.setUint32(24, OUTPUT_SAMPLE_RATE, true);
   view.setUint32(28, byteRate, true);
@@ -170,6 +185,10 @@ function decodeBase64(b64: string): Uint8Array {
   return bytes;
 }
 
+function isBase64(value: string): boolean {
+  return /^[A-Za-z0-9+/]*={0,2}$/.test(value) && value.length % 4 !== 1;
+}
+
 function encodeBase64(bytes: Uint8Array): string {
   // Chunked, because `apply` spreads the chunk into an argument list and a
   // large one overflows the stack. The size matters more than it looks: a
@@ -180,10 +199,7 @@ function encodeBase64(bytes: Uint8Array): string {
   let binary = "";
   const CHUNK = 4096;
   for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode.apply(
-      null,
-      Array.from(bytes.subarray(i, i + CHUNK)),
-    );
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
   }
   return btoa(binary);
 }

@@ -1,4 +1,4 @@
-# EVE security audit — 2026-08-09
+# EVE security audit — 2026-08-30
 
 Scope: `services/api-node/**` and `apps/mobile/src/**`. Reviewed authentication and
 session handling, per-user isolation, the OAuth flow, secret handling, transport,
@@ -11,16 +11,18 @@ running code rather than by reading it, that is stated.
 
 Fixes applied in this pass are marked **[fixed]**; everything else is reported only.
 
-**Verification.** `services/api-node`: 148/148 tests pass (nine of them new, in
-`tests/security-audit.test.mjs`, one per fixed finding and written to fail against the
-old code), `pnpm typecheck` clean. `apps/mobile`: `tsc --noEmit` clean. `eslint` across
-both: 0 errors. Findings 1 and 6 are environment-gated, so they were additionally
-checked by running `requireUserID` under `NODE_ENV=development` (header accepted, dev
-convenience intact) and `NODE_ENV=production` (401, rejected).
+**Verification.** At the time of this review `services/api-node` has 228/228 tests
+passing, including the security, quota, OAuth handoff, provider-response, and voice
+input regressions. Workspace TypeScript checks and formatting are clean; ESLint has no
+errors (only the existing `no-console` warnings in debug scripts). Findings 1 and 6
+are environment-gated, so they were additionally checked by running `requireUserID`
+under `NODE_ENV=development` (header accepted, dev convenience intact) and
+`NODE_ENV=production` (401, rejected). Android debug and release Kotlin compilation
+also completed successfully.
 
 **Not verified on device.** The phone is off, so no fix here has been exercised against
-a running client. The two mobile findings (8) are reported rather than fixed for that
-reason.
+a running native client. The release transport requirement remains an operational
+deployment check.
 
 ---
 
@@ -64,39 +66,31 @@ The dev-convenience path is unchanged.
 
 ## Medium
 
-### 2. HTML injection into the OAuth callback page **[fixed]**
+### 2. HTML injection and bearer-token exposure in the OAuth callback **[fixed]**
 
-`services/api-node/src/http/responses.mjs:78-97`
+`services/api-node/src/http/responses.mjs`, `services/api-node/src/google/oauth.mjs`,
+`services/api-node/src/storage/postgres.mjs`
 
-`writeAuthRedirect` interpolated the OAuth `returnTo` value into an inline `<script>`
-with `JSON.stringify`, which produces a *JavaScript* string literal and does no HTML
-escaping. A `returnTo` containing `</script>` therefore closed the script element and
-everything after it was parsed as markup.
+The old `writeAuthRedirect` interpolated the OAuth `returnTo` value into an inline
+`<script>` with `JSON.stringify`, which produced a JavaScript string literal rather
+than an HTML-safe value. It also placed the newly minted bearer session token in the
+redirect URL. A hostile `returnTo` could therefore close the script element and the
+token could be copied from browser/proxy history.
 
-Verified, not inferred. `safeReturnTo` (`src/google/oauth.mjs:101-107`) allows any
-value beginning `eve://`, so this payload passes the allowlist:
+The original exploit payload was:
 
 ```
 eve://cb</script><img src=x onerror=alert(document.body.innerHTML)>
 ```
 
-and the emitted document contained the closing tag and the `<img>` verbatim.
-`/v1/auth/google-url` accepts `returnTo` from an unauthenticated query parameter, so
-the value is attacker-supplied.
+The callback now accepts only the registered `eve://auth/google` (or local development)
+destination and sends a short-lived, one-use `eve_code` in the URL fragment. The app
+exchanges that code over the API before receiving a bearer session token. Postgres
+consumption uses an atomic `DELETE ... RETURNING`, so two API workers cannot replay the
+same state or handoff; JSON mode removes and persists the entry before returning.
 
-Severity is Medium rather than High because of a mitigation I confirmed by running the
-header logic: `applySecurityHeaders` sets
-`script-src 'self'` with no `unsafe-inline` (`src/http/middleware.mjs:21-22`), and
-because `writeHead`'s header object merges with values already set via `setHeader`,
-that CSP is still present on the callback response. Inline event handlers are blocked,
-so the payload does not execute script in a CSP-respecting browser. What remains is
-attacker-controlled markup on a page that contains the session token — good enough for
-a convincing credential-phishing overlay, and it becomes straightforward token theft
-the moment the CSP is loosened or the page is rendered by anything that ignores it.
-
-Fixed by removing the HTML page from the success path: the callback now answers with a
-`302` to the allowlisted `returnTo`. That deletes the injection surface rather than
-escaping it, and it also repairs finding 3.
+The regression tests cover hostile destinations, fragment-only handoffs, replay
+rejection, and the bounded state store.
 
 ### 3. The OAuth auto-redirect was broken by the app's own CSP **[fixed]**
 
@@ -105,22 +99,23 @@ escaping it, and it also repairs finding 3.
 Found while checking finding 2. The comment above the CSP says the OAuth callback
 "uses inline script so we relax that one route at write time" — no such relaxation
 exists anywhere in the codebase, and the empirical check above shows the restrictive
-CSP is served on that route. So `script-src 'self'` was blocking the *legitimate*
+CSP is served on that route. So `script-src 'self'` was blocking the _legitimate_
 `window.location.replace(...)` as well as the injected payload: users completing Google
 sign-in were silently falling through to the manual "Return to EVE" link instead of
 being redirected. Not a vulnerability, but a real defect with a security-shaped cause,
-and it is resolved by the 302 in finding 2. The stale comment is corrected.
+and it is resolved by the 302 in finding 2. The native app now consumes the
+fragment handoff explicitly, and the stale comment is corrected.
 
-### 4. Prompt injection into an LLM that can send mail **[fixed, partially]**
+### 4. Prompt injection into an LLM that can send mail **[mitigated]**
 
 `services/api-node/src/briefing/assistant.mjs:176-226`,
 `src/voice/wsServer.mjs:167-195`, `src/briefing/tools.mjs:25-86`
 
-`assistantContext()` inlines email subjects, summaries, sender names and urgency
-reasons — plus device notification titles and bodies — directly into the JSON context
-handed to the model, with nothing marking that region as untrusted. The same context
-feeds the voice bridge's system instruction. The model holds `approve_draft`, which
-sends real mail through Gmail, and `remember`, which writes durable memory.
+`assistantContext()` includes email subjects, summaries, sender names and urgency
+reasons — plus device notification titles and bodies — in the JSON context handed to
+the model. The same context feeds the voice bridge's system instruction. The model
+holds `approve_draft`, which sends real mail through Gmail, and `remember`, which
+writes durable memory.
 
 Anyone who can email the user can therefore place text of their choosing into the
 model's context. A subject line phrased as an instruction —
@@ -134,25 +129,21 @@ Success is not guaranteed on any given model, which is exactly why it should not
 left to the model's judgement: the downside is mail sent from the user's own account,
 or a planted "fact" that persists and shapes later answers.
 
-Partially fixed: the untrusted region is now fenced and labelled in both prompts, with
-an explicit instruction that content inside it is data describing what someone else
-said and never an instruction to act on. Fencing raises the cost of an attack; it does
-not eliminate it.
-
-Not fixed, and the change worth making next: `approve_draft` should require a
-corroborating user instruction in the current turn before it can fire. A capability
-that sends mail should not be reachable by inference from mail. That is a behavioural
-change to the tool harness and wants its own testing, so it is flagged rather than
-rushed in here.
+Mitigated in two layers: both prompts fence and label the workspace as untrusted, and
+all durable/destructive tools (`approve_draft`, `reject_draft`, `remember`, `forget`,
+and preference changes) require an explicit instruction in the authenticated user's
+current turn. The guard is covered by tool tests. Prompt fencing is still not a formal
+security boundary, so keep the explicit-intent check and add product-level confirmation
+before any higher-risk action or autonomous workflow.
 
 ### 5. Request bodies are read without a size limit **[fixed]**
 
 `services/api-node/src/http/responses.mjs:42-51`
 
 `readJSON` accumulated every chunk of the request stream into an array with no ceiling,
-then concatenated. A single large POST to any JSON route grows the heap until the
-process dies — an unauthenticated denial of service against every endpoint. Fixed with
-a 1 MiB cap that rejects with `413` and stops reading.
+then concatenated. A single large POST to any JSON route could grow the heap until the
+process died — an unauthenticated denial of service against every endpoint. Fixed with
+a 1 MiB buffer cap, a bounded drain, and a `413` response.
 
 ### 6. Rate limiting is bypassable by spoofing a header **[fixed]**
 
@@ -165,31 +156,35 @@ by honouring the header only when `TRUST_PROXY` is set, and using the socket add
 otherwise. Deployments behind a real proxy need that flag on; note the value must come
 from a proxy that overwrites rather than appends.
 
-### 7. Session token travels in a WebSocket query string
+### 7. Session token travels in a WebSocket query string **[fixed]**
 
-`services/api-node/server.mjs:583-593`, `apps/mobile/src/voice/useGeminiLive.ts:246-247`
+`services/api-node/server.mjs`, `services/api-node/src/voice/wsServer.mjs`,
+`apps/mobile/src/voice/useGeminiLive.ts`
 
-The voice bridge falls back to `?token=<session token>` when the upgrade carries no
-`Authorization` header. Query strings are the part of a URL that gets written to access
-logs, proxy logs and error trackers, so this puts a live credential in places that are
-routinely retained longer and read more widely than request bodies. Reported only — the
-fallback exists because some WebSocket clients cannot set headers on upgrade, so
-removing it needs the client side changed in step. A short-lived single-use ticket
-exchanged for the session, rather than the session token itself, is the usual fix.
+The old voice bridge fell back to `?token=<session token>` when the upgrade carried no
+`Authorization` header. Query strings are routinely written to access logs, proxy logs,
+and error trackers. The fallback has been removed: the server requires the upgrade
+header, and the React Native client supplies `Authorization: Bearer ...` through its
+supported WebSocket options. Browser WebSocket cannot set that header, so the web
+client explicitly leaves realtime voice disabled until a short-lived ticket or
+HttpOnly-cookie handshake is implemented; it never sends the long-lived bearer in a
+URL. Request logging also redacts all query values.
 
-### 8. Cleartext transport and plaintext token storage on the device
+### 8. Cleartext transport in development/configuration
 
-`apps/mobile/src/config.ts`, `apps/mobile/src/api/client.ts`
+`apps/mobile/src/config.ts`
 
-`resolveAPIBaseURL()` returns `http://` origins, so bearer tokens and full briefing
-content cross the network unencrypted, readable by anything on the same LAN. Separately,
-`TokenStore` keeps the session token in AsyncStorage under `eve.authToken`, which is
-unencrypted on disk; on a rooted or backed-up device it is recoverable.
+Development builds may use `http://` loopback/LAN URLs, so bearer tokens and briefing
+content are cleartext on that network. Release builds now fail closed unless the API
+URL is `https://`; production still needs a valid certificate, proxy termination, and
+an explicitly configured secure endpoint. Session tokens are stored in Expo Secure
+Store on native platforms, with a one-time migration/removal of the legacy
+AsyncStorage value. The browser build keeps tokens in memory only because Expo
+SecureStore has no web implementation; a server-managed cookie is the follow-up
+needed for durable browser sessions.
 
-Reported only, both deliberately. TLS is a deployment change, not a code one. Moving
-the token to the platform keystore needs `expo-secure-store`, which is native code
-absent from the installed dev-client APK — adding it forces a rebuild and reinstall,
-which is out of scope for an audit pass and blocked while the device is off.
+The remaining action is operational: provision TLS and set
+`EXPO_PUBLIC_EVE_API_URL` to the HTTPS origin before shipping a release build.
 
 ---
 
@@ -206,16 +201,14 @@ the local file and it currently contains only a placeholder test token and an em
 with `mode: 0o600`. Note this only governs files created from now on; an existing
 `state.json` keeps its permissions until `chmod 600` is run on it.
 
-### 10. CORS allows any origin with `Authorization`
+### 10. CORS allows any origin with `Authorization` **[fixed]**
 
 `services/api-node/src/http/middleware.mjs:7-12`
 
-`Access-Control-Allow-Origin: *` with `Authorization` in the allowed headers. Not
-directly exploitable — the wildcard means credentialed requests are refused by the
-browser, and the token lives in a header rather than a cookie, so there is no ambient
-authority for a hostile page to borrow. Worth narrowing to a known list before any
-browser client ships, since the combination is one config change away from being a
-problem. Reported only.
+The API now accepts a comma-separated `CORS_ORIGINS` allowlist. Development keeps
+the wildcard convenience when the list is blank; production sends no cross-origin
+allowance until an explicit origin is configured, and rejects disallowed preflights.
+Bearer tokens remain header-bound rather than cookie-bound.
 
 ### 11. Google sign-in silently absorbs a matching password account
 
@@ -227,23 +220,70 @@ convenient, but it means the security of the password account is bounded by the 
 of the Google account and by whether the email was ever verified. Reported only —
 changing it is a product decision, not a bug fix.
 
-### 12. Broader Android permissions than the app uses
+### 12. Broader Android permissions than the app uses **[fixed]**
 
 `apps/mobile/android/app/src/main/AndroidManifest.xml`
 
 `SYSTEM_ALERT_WINDOW`, `READ_EXTERNAL_STORAGE` and `WRITE_EXTERNAL_STORAGE` are
 declared. Draw-over-other-apps in particular is a permission users are taught to refuse,
 and it widens the blast radius if the app is ever compromised. `EveNotificationListenerService`
-being `exported="true"` is correct — the system binds it, so it has to be. Worth pruning
-to what is actually called. Reported only, since it needs a rebuild to verify.
+being `exported="true"` is correct — the system binds it, so it has to be. The unused
+storage/overlay declarations have now been removed from the debug, debug-optimized,
+and release manifests.
+
+The listener still receives notifications from every app the user has enabled in
+Android system settings by default. The native module now supports an encrypted
+per-app allowlist, excludes EVE and Android system UI previews, and persists a
+bounded retry queue bound to the active account. A user-facing package picker and
+retry metrics remain product follow-ups; captured previews are bounded to 100
+entries and expire after the configured retention period, and the authenticated
+`DELETE /v1/device-notifications` route clears the account's stored history. The
+native source and Expo plugin template are kept identical and both debug and release
+native compilation have been exercised; installation and runtime behavior on a physical
+device remain unverified because no device is connected.
 
 ### 13. Test-only dispatch route lives in the production path
 
 `services/api-node/server.mjs:485-489`
 
-Guarded by `EVE_ALLOW_TEST_DISPATCH`, so it is off by default and the guard is correct.
-Noted only because a test hook that can trigger real dispatch is one stray environment
-variable from being live; it belongs behind the `isProduction` check as well.
+Guarded by `EVE_ALLOW_TEST_DISPATCH` and now explicitly disabled whenever
+`NODE_ENV=production`. This remains a development-only integration hook because it
+can trigger a real push dispatch when enabled.
+
+### 14. Background Gmail pushes bypassed proactive controls **[fixed]**
+
+`services/api-node/src/briefing/gmail-poller.mjs`
+
+The 15-minute poller used to call the Expo transport directly after every poll.
+That path ignored quiet hours, category opt-in, the legacy global push switch, and
+hourly/daily caps, so a busy inbox could interrupt a user indefinitely. Poll results
+still create an in-app system notification, but any device push is now represented
+as a proactive thought and routed through `dispatchProactive` and its full gate. The
+mail category remains opt-in by default.
+
+### 15. Google-only Postgres accounts acquired a fake password after restart **[fixed]**
+
+`services/api-node/src/storage/postgres.mjs`, `src/auth/index.mjs`,
+`src/auth/account.mjs`
+
+The old schema required `password_hash`, so Google-only users received a random hash
+just to satisfy the constraint. The hash was absent in memory on first login but was
+loaded after a restart, exposing an impossible Change Password control and treating
+the account as a password authenticator. New schema bootstraps make the hash nullable
+and add `password_auth_enabled`; password signups write `TRUE`, Google-only signups
+write `FALSE`, and loading/login/change-password honor the marker. Rows from the old
+schema remain `NULL` (ambiguous) so a real password is not silently disabled; a
+successful legacy password login upgrades the marker. Existing accounts should be
+reviewed during a migration window if the product needs to distinguish old
+Google-only rows from linked password accounts.
+
+### 16. Password fields had no work ceiling **[fixed]**
+
+`services/api-node/src/auth/password.mjs`, `src/auth/index.mjs`,
+`src/auth/account.mjs`
+
+Scrypt work is now rejected above 256 characters before hashing (and verification
+short-circuits), complementing the request-body limit.
 
 ---
 
@@ -256,8 +296,8 @@ the state of the codebase:
   A leaked database does not yield usable tokens.
 - Passwords use scrypt with a per-user salt, compared with `crypto.timingSafeEqual`
   (`auth/password.mjs`).
-- OAuth `state` is 24 random bytes, single-use, and expires in 10 minutes
-  (`google/oauth.mjs:68-94`) — a correct CSRF defence for the callback.
+- OAuth `state` is 24 random bytes, single-use, expires in 10 minutes, and is bounded
+  in both memory and Postgres (`google/oauth.mjs`, `storage/postgres.mjs`).
 - `changePassword` requires the current password even with a valid session.
 - The logger redacts `authorization`, `password`, `token`, `access_token`,
   `refresh_token` and `client_secret` (`logger.mjs`).
@@ -269,7 +309,7 @@ the state of the codebase:
 
 ---
 
-## Two things that need a human, not a patch
+## One thing that needs a human, not a patch
 
 **Rotate the exposed credentials.** `SECURITY.md` already records that the
 `DATABASE_URL`, the Google `client_secret` and the Gemini key were exposed in a
@@ -279,8 +319,6 @@ whether that happened. If it has not, it outranks every finding above — a vali
 `client_secret` in someone else's hands defeats the entire OAuth flow regardless of how
 well the code is written.
 
-**Require `DATABASE_URL` in production.** Finding 1 is fixed at the point of use, but
-the deeper issue is that the storage backend silently determines the security model. A
-boot-time assertion that production implies Postgres would make that impossible to get
-wrong by accident.
-
+Production now requires `DATABASE_URL` at configuration validation time, so the
+security-sensitive JSON fallback cannot be selected accidentally. Development and
+test environments may still use the private JSON store.

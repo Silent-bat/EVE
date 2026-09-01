@@ -44,9 +44,7 @@ export function GradientButton({
   // action twice while the first is in flight.
   const inert = disabled || loading;
 
-  const glyph = icon ? (
-    <Ionicons name={icon} size={compact ? 15 : 18} color={palette.textInverse} />
-  ) : null;
+  const glyph = icon ? <Ionicons name={icon} size={compact ? 15 : 18} color={palette.textInverse} /> : null;
 
   return (
     <PressableScale

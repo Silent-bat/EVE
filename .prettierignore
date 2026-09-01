@@ -18,3 +18,16 @@ apps/preview
 !.env.example.md
 CLAUDE.md
 services/api-node/tests/.eve-test-data/**
+apps/promo/web-render/app.js
+apps/promo/out/**
+apps/promo/public/*.mp4
+apps/promo/public/*.m4a
+*.pdf
+# Root pitch-deck exports and their one-off print helpers are generated
+# deliverables, not workspace source files.
+eve_investor_deck.html
+eve_pitch_deck.html
+eve_pitch_deck_flat.html
+deck2pdf.mjs
+make_flat.mjs
+print_flat.mjs

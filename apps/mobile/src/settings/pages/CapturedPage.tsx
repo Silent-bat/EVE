@@ -6,7 +6,7 @@
  * below it is empty and inexplicable until you grant it, so the two belong on
  * the same screen.
  */
-import { Platform, StyleSheet, Text, View } from "react-native";
+import { Alert, Platform, StyleSheet, Text, View } from "react-native";
 
 import type { DeviceNotification } from "../../types";
 import { formatTime } from "../../utils/formatters";
@@ -25,15 +25,25 @@ export function CapturedPage({
   enabled,
   onBack,
   onOpenAccessSettings,
+  onClear,
 }: {
   notifications: DeviceNotification[];
   supported: boolean;
   enabled: boolean;
   onBack: () => void;
   onOpenAccessSettings: () => void;
+  onClear: () => void | Promise<void>;
 }) {
   const styles = useThemedStyles(makeStyles);
   const shown = notifications.slice(0, MAX_SHOWN);
+
+  function confirmClear() {
+    if (notifications.length === 0) return;
+    Alert.alert("Clear captured notifications?", "EVE will remove these previews from your account.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Clear", style: "destructive", onPress: () => void onClear() },
+    ]);
+  }
 
   return (
     <SettingsPage
@@ -43,11 +53,7 @@ export function CapturedPage({
     >
       <SettingsGroup
         title="Permission"
-        footer={
-          supported
-            ? "Android only. Revoke it any time from the same screen."
-            : undefined
-        }
+        footer={supported ? "Android only. Revoke it any time from the same screen." : undefined}
       >
         <SettingsRowItem
           icon="phone-portrait-outline"
@@ -69,13 +75,18 @@ export function CapturedPage({
 
       <View style={styles.listHeader}>
         <Text style={styles.listTitle}>Recently captured</Text>
-        {notifications.length > 0 ? (
-          <Text style={styles.listCount}>
-            {notifications.length > MAX_SHOWN
-              ? `${MAX_SHOWN} of ${notifications.length}`
-              : String(notifications.length)}
-          </Text>
-        ) : null}
+        <View style={styles.listActions}>
+          {notifications.length > 0 ? (
+            <Text style={styles.listCount}>
+              {notifications.length > MAX_SHOWN
+                ? `${MAX_SHOWN} of ${notifications.length}`
+                : String(notifications.length)}
+            </Text>
+          ) : null}
+          {notifications.length > 0 ? (
+            <InlineButton label="Clear" tone="neutral" onPress={confirmClear} />
+          ) : null}
+        </View>
       </View>
 
       {shown.length === 0 ? (
@@ -148,6 +159,7 @@ function makeStyles({ palette, type }: ThemeValue) {
       textTransform: "uppercase",
     },
     listCount: { ...type.caption, fontVariant: ["tabular-nums"] },
+    listActions: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
     card: {
       backgroundColor: palette.surface,
       borderRadius: radius.xl,

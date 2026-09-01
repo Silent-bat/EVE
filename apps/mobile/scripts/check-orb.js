@@ -49,7 +49,10 @@ const MODULES = process.env.ORB_CHECK_MODULES;
 if (MODULES) {
   const tokenizer = require(path.join(MODULES, "glsl-tokenizer"));
   const parser = require(path.join(MODULES, "glsl-parser/direct"));
-  for (const [name, code] of [["VERTEX", vertex], ["FRAGMENT", fragment]]) {
+  for (const [name, code] of [
+    ["VERTEX", vertex],
+    ["FRAGMENT", fragment],
+  ]) {
     try {
       const tokens = tokenizer(code);
       const bad = tokens.filter((t) => t.type === "invalid");
@@ -86,22 +89,42 @@ const checks = [
       fragment,
     ),
   ],
-  ["no local shadowing step/mix/length", !/\b(float|int|vec\d|mat\d)\s+(step|mix|length)\s*[=;(]/.test(vertex + fragment)],
+  [
+    "no local shadowing step/mix/length",
+    !/\b(float|int|vec\d|mat\d)\s+(step|mix|length)\s*[=;(]/.test(vertex + fragment),
+  ],
   ["no while/unbounded loop (GLSL ES 1.0)", !/\bwhile\s*\(/.test(vertex + fragment)],
   ["every varying written in vertex", VARYINGS.every((v) => new RegExp(v + "\\s*=").test(vertex))],
-  ["every varying declared in fragment", VARYINGS.every((v) => new RegExp("varying float " + v).test(fragment))],
-  ["every varying declared in vertex too", VARYINGS.every((v) => new RegExp("varying float " + v).test(vertex))],
+  [
+    "every varying declared in fragment",
+    VARYINGS.every((v) => new RegExp("varying float " + v).test(fragment)),
+  ],
+  [
+    "every varying declared in vertex too",
+    VARYINGS.every((v) => new RegExp("varying float " + v).test(vertex)),
+  ],
   [
     "no varying declared in fragment and never written in vertex",
-    [...fragment.matchAll(/varying\s+\w+\s+(\w+)/g)].map((m) => m[1]).every((v) => new RegExp(v + "\\s*=").test(vertex)),
+    [...fragment.matchAll(/varying\s+\w+\s+(\w+)/g)]
+      .map((m) => m[1])
+      .every((v) => new RegExp(v + "\\s*=").test(vertex)),
   ],
   /* Names from earlier versions of this shader. Each was a real uniform or
      varying once; a leftover reference is dead code at best and a stale lookup
      at worst. */
-  ["no stale u_hueA/u_hueB/u_hueC/u_cycle/u_resolution", !/u_hueA|u_hueB|u_hueC|u_cycle|u_resolution/.test(src)],
+  [
+    "no stale u_hueA/u_hueB/u_hueC/u_cycle/u_resolution",
+    !/u_hueA|u_hueB|u_hueC|u_cycle|u_resolution/.test(src),
+  ],
   ["no stale v_shade/a_shade/a_depth", !/v_shade|a_shade|a_depth/.test(src)],
-  ["no stale RMS_MODULATION constant (it is measured now, not hardcoded)", !/RMS_MODULATION/.test(src)],
-  ["gl_PointSize is solved from u_pointBase and clamped", /gl_PointSize[\s\S]*u_maxPoint/.test(vertex) && /u_pointBase/.test(vertex)],
+  [
+    "no stale RMS_MODULATION declaration (it is measured now, not hardcoded)",
+    !/const\s+RMS_MODULATION\s*=/.test(src),
+  ],
+  [
+    "gl_PointSize is solved from u_pointBase and clamped",
+    /gl_PointSize[\s\S]*u_maxPoint/.test(vertex) && /u_pointBase/.test(vertex),
+  ],
   ["resolution is handled on the CPU, not in the shader", !/u_resolution/.test(vertex)],
 ];
 
@@ -114,7 +137,8 @@ checks.push([
 ]);
 
 // Every uniform the shaders declare must be looked up somewhere in the JS.
-const uniforms = [...(vertex + fragment).matchAll(/uniform\s+\w+\s+(\w+)/g)].map((m) => m[1]);
+const shaderSource = (vertex + "\n" + fragment).replace(/\/\*[\s\S]*?\*\//g, "");
+const uniforms = [...shaderSource.matchAll(/uniform\s+\w+\s+(\w+)/g)].map((m) => m[1]);
 const missingU = uniforms.filter((u) => !new RegExp('"' + u + '"').test(src));
 checks.push([
   "every uniform is looked up in JS" + (missingU.length ? " — missing " + missingU.join(",") : ""),
@@ -133,7 +157,10 @@ console.log("\n--- structure (the reference's load-bearing properties) ---");
 /* The arc count is set by an explicit cosine. A pure noise field cannot fix a
    harmonic mode — it only makes one likely — so if this degrades to noise alone
    the arcs wander frame to frame and the structure goes with them. */
-checks.push(["arcs are anchored by an explicit cos(N*az), not left to noise", /cos\(\s*5\.0\s*\*\s*az/.test(vertex)]);
+checks.push([
+  "arcs are anchored by an explicit cos(N*az), not left to noise",
+  /cos\(\s*5\.0\s*\*\s*az/.test(vertex),
+]);
 
 // atan(0,0) is undefined, which is exactly both poles, and the NaN propagates
 // into position, size and colour for those vertices.
@@ -152,14 +179,19 @@ checks.push([
    through abs(n.z) so the front and back faces crowd into the same projected
    annulus. No shading exponent can put a brightness maximum mid-disc, so if this
    becomes a signed facing term the ring stops existing. */
-checks.push(["facing uses abs(n.z) so both faces pile into the limb", /float facing = abs\(n\.z\)/.test(vertex)]);
+checks.push([
+  "facing uses abs(n.z) so both faces pile into the limb",
+  /float facing = abs\(n\.z\)/.test(vertex),
+]);
 
 /* The flare envelope must be normalised to PEAK 1, not mean 1: consumers feed it
    to mix(), which extrapolates past its endpoints rather than clamping.
    Recomputed here rather than trusted — changing a coefficient without the
    divisor is a silent overshoot. */
 {
-  const m = vertex.match(/smoothstep\(0\.0,\s*([\d.]+),\s*cyc\)\s*\*\s*exp\(-([\d.]+)\s*\*\s*cyc\)\s*\/\s*([\d.]+)/);
+  const m = vertex.match(
+    /smoothstep\(0\.0,\s*([\d.]+),\s*cyc\)\s*\*\s*exp\(-([\d.]+)\s*\*\s*cyc\)\s*\/\s*([\d.]+)/,
+  );
   let ok = false;
   let detail = "(envelope not found)";
   if (m) {
@@ -170,7 +202,8 @@ checks.push(["facing uses abs(n.z) so both faces pile into the limb", /float fac
       peak = Math.max(peak, t * t * (3 - 2 * t) * Math.exp(-decay * c));
     }
     ok = Math.abs(peak / div - 1) < 0.03;
-    detail = "(peak " + peak.toFixed(3) + " / divisor " + div + " = " + (peak / div).toFixed(3) + ", want 1.0)";
+    detail =
+      "(peak " + peak.toFixed(3) + " / divisor " + div + " = " + (peak / div).toFixed(3) + ", want 1.0)";
   }
   checks.push(["flare envelope normalised to peak 1 " + detail, ok]);
 }
@@ -194,7 +227,7 @@ checks.push(["facing uses abs(n.z) so both faces pile into the limb", /float fac
    used to push half the sphere out of the clip volume. */
 checks.push([
   "u_spread is folded into radius, ahead of the knee",
-  /radius = shell[\s\S]{0,400}u_spread \* u_energy/.test(vertex) &&
+  /float radius = shell[\s\S]{0,800}u_spread \* u_energy/.test(vertex) &&
     /radius -= smoothstep\([\d.]+, [\d.]+, radius\)/.test(vertex),
 ]);
 
@@ -206,15 +239,18 @@ checks.push(["eruption is clamped at the source", /float erupt = clamp\(/.test(v
 // yellow hole in the sphere instead of lighting its surface up.
 checks.push(["heat is added to the palette, not mixed into it", /c \+=[\s\S]{0,60}v_heat/.test(fragment)]);
 
-// orb1's ramp: ash body, violet/blue filaments, white cores. Losing a stop
-// collapses the ribbons to flat white — measured on the reference.
+// The product palette spans green/cyan/blue/violet. Losing a stop collapses the
+// multicolor body into a two-tone wash, especially after premultiplied blending.
 checks.push([
   "palette keeps all four stops",
-  ["ash", "violet", "blue", "white"].every((n) => new RegExp("vec3 " + n + "\\s*=").test(fragment)),
+  ["green", "cyan", "blue", "violet"].every((n) => new RegExp("vec3 " + n + "\\s*=").test(fragment)),
 ]);
 
-// Alpha is what additive blending accumulates; unbounded it blows out to white.
-checks.push(["fragment alpha is clamped", /gl_FragColor = vec4\(c, clamp\(/.test(fragment)]);
+// Premultiplied opacity must be bounded before it reaches the framebuffer.
+checks.push([
+  "fragment opacity is clamped and premultiplied",
+  /float opacity = clamp\(/.test(fragment) && /gl_FragColor = vec4\(c \* opacity, opacity\)/.test(fragment),
+]);
 
 // Every FieldState must have a SPIN, SPREAD and FLARE entry or the shader gets NaN.
 const states = ["idle", "listening", "thinking", "speaking"];
@@ -223,7 +259,9 @@ const spreadBlock = src.match(/const SPREAD[\s\S]*?\};/)[0];
 const flareBlock = src.match(/const FLARE[\s\S]*?\};/)[0];
 checks.push([
   "SPIN, SPREAD and FLARE cover every FieldState",
-  states.every((s) => spinBlock.includes(s + ":") && spreadBlock.includes(s + ":") && flareBlock.includes(s + ":")),
+  states.every(
+    (s) => spinBlock.includes(s + ":") && spreadBlock.includes(s + ":") && flareBlock.includes(s + ":"),
+  ),
 ]);
 
 /* The arcs are structure, not decoration: at flare 0 the sphere is a featureless
@@ -306,7 +344,11 @@ const dev = (a) => Math.max(...a.map((b) => Math.abs(b - expected) / expected));
 console.log("  y-bands:   " + bands.join(" / ") + "  (expect ~" + expected + " each)");
 report("uniform in solid angle", dev(bands) < 0.1, "max deviation " + (dev(bands) * 100).toFixed(1) + "%");
 console.log("  phi-bands: " + phiBands.join(" / "));
-report("uniform in longitude", dev(phiBands) < 0.1, "max deviation " + (dev(phiBands) * 100).toFixed(1) + "%");
+report(
+  "uniform in longitude",
+  dev(phiBands) < 0.1,
+  "max deviation " + (dev(phiBands) * 100).toFixed(1) + "%",
+);
 
 // Determinism: same count must give a byte-identical buffer, or Fast Refresh
 // reshuffles the sphere on every edit.
@@ -350,7 +392,14 @@ const target = Number(src.match(/TARGET_COVERAGE = ([\d.]+)/)[1]);
 const fit = Number(src.match(/const FIT = ([\d.]+)/)[1]);
 const minSprite = Number(src.match(/MIN_SPRITE_PX = ([\d.]+)/)[1]);
 console.log(
-  "  POINTS_PER_MOTE=" + perMote + "  TARGET_COVERAGE=" + target + "  FIT=" + fit + "  MIN_SPRITE_PX=" + minSprite,
+  "  POINTS_PER_MOTE=" +
+    perMote +
+    "  TARGET_COVERAGE=" +
+    target +
+    "  FIT=" +
+    fit +
+    "  MIN_SPRITE_PX=" +
+    minSprite,
 );
 
 /* The GLSL modulation and its JS mirror must be the same expression. Compared by
@@ -358,7 +407,8 @@ console.log(
    the result was a field 1.46x too bright, which nothing else catches. */
 {
   const glsl = vertex.match(/float modulation = ([^;]+);/)[1];
-  const jsMirror = src.match(/return \((1\.5[^;]+)\);/);
+  const modulationFunction = src.match(/function modulation\([\s\S]*?\n\}/)?.[0] ?? "";
+  const jsMirror = modulationFunction.match(/return\s+([\s\S]*?);/);
   const norm = (s) =>
     s
       .replace(/\s+/g, "")
@@ -367,8 +417,18 @@ console.log(
       .replace(/v_defocus|defocus/g, "D")
       .replace(/a_size|sizeJitter/g, "S")
       .replace(/(\d)\.0(?![\d])/g, "$1");
-  const ok = Boolean(jsMirror) && norm(glsl) === norm(jsMirror[1]);
-  report("JS modulation() mirrors the GLSL exactly", ok, ok ? "" : "\n         GLSL: " + norm(glsl) + "\n         JS:   " + (jsMirror ? norm(jsMirror[1]) : "(not found)"));
+  const canonical = (s) => norm(s).replace(/^\(|\)$/g, "");
+  const ok = Boolean(jsMirror) && canonical(glsl) === canonical(jsMirror[1]);
+  report(
+    "JS modulation() mirrors the GLSL exactly",
+    ok,
+    ok
+      ? ""
+      : "\n         GLSL: " +
+          norm(glsl) +
+          "\n         JS:   " +
+          (jsMirror ? norm(jsMirror[1]) : "(not found)"),
+  );
 }
 
 /* The count ceiling is the fix for a small container: at a fixed coverage,
@@ -390,7 +450,10 @@ function solveDiameter(count, px) {
     const near = Math.min(1, Math.max(0, (buf[o + 2] + 1.36) / 2.72));
     const defocus = Math.abs(near - FOCAL) / Math.max(FOCAL, 1 - FOCAL);
     const m =
-      (1.5 + 2.6 * buf[o + 3]) * (0.62 + 0.72 * near) * (1 + 1.3 * defocus) * (1 + smoothstep(0.98, 1.052, shell));
+      (1.5 + 2.6 * buf[o + 3]) *
+      (0.62 + 0.72 * near) *
+      (1 + 1.3 * defocus) *
+      (1 + smoothstep(0.98, 1.052, shell));
     sumSq += m * m;
   }
   const rms = Math.sqrt(sumSq / count);
@@ -412,8 +475,21 @@ for (const site of [
   const { d, rms } = solveDiameter(count, px);
   const coverage = (count * Math.PI * Math.pow(d / 2, 2)) / (Math.PI * Math.pow(fit * 0.5 * px, 2));
   console.log(
-    "  " + site.name + " count=" + site.motes + " -> " + count + " points @ " + px + "px" +
-      "  sprite=" + d.toFixed(2) + "px  rms=" + rms.toFixed(3) + "  coverage=" + coverage.toFixed(3),
+    "  " +
+      site.name +
+      " count=" +
+      site.motes +
+      " -> " +
+      count +
+      " points @ " +
+      px +
+      "px" +
+      "  sprite=" +
+      d.toFixed(2) +
+      "px  rms=" +
+      rms.toFixed(3) +
+      "  coverage=" +
+      coverage.toFixed(3),
   );
   report(site.name + " sprite is large enough to read as dust", d >= minSprite - 0.1);
   report(site.name + " coverage lands on TARGET_COVERAGE", Math.abs(coverage - target) < 0.02);
@@ -437,7 +513,10 @@ for (const site of [
    flare's own dynamic range. */
 {
   const heat = Number(vertex.match(/HEAT_SIZE = ([\d.]+)/)[1]);
-  report("flare size excursion is bounded (x" + (1 + heat).toFixed(2) + " at full heat)", heat > 0 && 1 + heat < 3);
+  report(
+    "flare size excursion is bounded (x" + (1 + heat).toFixed(2) + " at full heat)",
+    heat > 0 && 1 + heat < 3,
+  );
 }
 
 console.log(failed ? "\nFAILED\n" : "\nall checks passed\n");

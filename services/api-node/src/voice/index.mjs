@@ -18,10 +18,11 @@
 import { config } from "../config.mjs";
 import { moduleLogger } from "../logger.mjs";
 import { httpError } from "../http/responses.mjs";
+import { readBoundedResponseJSON } from "../google/oauth.mjs";
 
 const log = moduleLogger("voice");
 
-const MAX_AUDIO_BASE64_BYTES = 1_500_000; // ~1.1 MB raw audio, ~3 min at 32kbps AAC
+const MAX_AUDIO_BASE64_BYTES = 1_500_000; // legacy ceiling; config can make it stricter
 
 // Gemini accepts these audio mime types inline. m4a containers are reported
 // as audio/mp4 on iOS — we accept that and let Gemini decode.
@@ -87,8 +88,12 @@ export async function transcribeAudio({ audioBase64, mimeType }) {
   if (typeof audioBase64 !== "string" || audioBase64.length === 0) {
     throw httpError(400, "audio is required");
   }
-  if (audioBase64.length > MAX_AUDIO_BASE64_BYTES) {
-    throw httpError(413, `audio exceeds ${MAX_AUDIO_BASE64_BYTES} base64 bytes`);
+  const maxAudioBytes = Math.min(MAX_AUDIO_BASE64_BYTES, config.voice.maxAudioBytes);
+  if (audioBase64.length > maxAudioBytes) {
+    throw httpError(413, `audio exceeds ${maxAudioBytes} base64 bytes`);
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(audioBase64) || audioBase64.length % 4 === 1) {
+    throw httpError(400, "audio must be valid base64");
   }
   const normalizedMime = normalizeMimeType(mimeType);
   if (!ACCEPTED_MIME.has(normalizedMime)) {
@@ -101,7 +106,9 @@ export async function transcribeAudio({ audioBase64, mimeType }) {
   const model = process.env.GEMINI_VOICE_MODEL || "gemini-2.5-flash";
   const modelName = model.startsWith("models/") ? model : `models/${model}`;
   const apiKey = gemini.apiKey;
-  const url = `https://generativelanguage.googleapis.com/v1beta/${modelName}:generateContent?key=${apiKey}`;
+  // Keep the billable credential out of the URL. Google accepts the API key in
+  // this header, while query strings are routinely retained by proxies/loggers.
+  const url = `https://generativelanguage.googleapis.com/v1beta/${modelName}:generateContent`;
 
   // This is deliberately stricter than ordinary transcription. Always-on
   // microphones hear televisions, conversations across the room, several
@@ -140,7 +147,8 @@ export async function transcribeAudio({ audioBase64, mimeType }) {
   try {
     response = await fetchImpl(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(config.outboundTimeoutMs),
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify(body),
     });
   } catch (error) {
@@ -151,7 +159,7 @@ export async function transcribeAudio({ audioBase64, mimeType }) {
   /** @type {any} */
   let payload = null;
   try {
-    payload = await response.json();
+    payload = await readBoundedResponseJSON(response, config.googleResponseMaxBytes);
   } catch {
     throw httpError(502, "voice transcription returned an invalid response");
   }
@@ -187,9 +195,9 @@ const REJECTION_REASONS = new Set([
 ]);
 
 /**
- * Parse the structured voice-quality verdict. A plain-text fallback keeps the
- * endpoint compatible with older model behavior, but a malformed JSON-looking
- * response is rejected rather than accidentally becoming a command.
+ * Parse the structured voice-quality verdict. The quality gate is security
+ * sensitive, so a model response that is not valid JSON is rejected rather than
+ * treated as an implicit approval.
  *
  * @param {string} raw
  */
@@ -206,17 +214,10 @@ function parseVoiceVerdict(raw) {
     if (accepted && text) {
       return { accepted: true, text, reason: "clear_foreground_speech" };
     }
-    const reason = REJECTION_REASONS.has(parsed?.reason)
-      ? parsed.reason
-      : "unintelligible";
+    const reason = REJECTION_REASONS.has(parsed?.reason) ? parsed.reason : "unintelligible";
     return { accepted: false, text: "", reason };
   } catch {
-    // Previous Gemini behavior returned the transcript directly. Preserve it
-    // only when it is clearly plain text; JSON-like garbage is unsafe to pass.
-    if (cleaned.startsWith("{") || cleaned.startsWith("[")) {
-      return { accepted: false, text: "", reason: "unintelligible" };
-    }
-    return { accepted: true, text: cleaned, reason: "clear_foreground_speech" };
+    return { accepted: false, text: "", reason: "unintelligible" };
   }
 }
 

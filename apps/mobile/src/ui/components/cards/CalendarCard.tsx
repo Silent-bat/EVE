@@ -34,13 +34,7 @@ function countdownLabel(startsAt: string, endsAt: string, now: number = Date.now
   return formatTime(startsAt);
 }
 
-export function CalendarCard({
-  event,
-  onPress,
-}: {
-  event: CalendarEvent;
-  onPress?: () => void;
-}) {
+export function CalendarCard({ event, onPress }: { event: CalendarEvent; onPress?: () => void }) {
   const { palette } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const imminent = minutesUntil(event.startsAt) <= 15;
@@ -83,13 +77,7 @@ export function CalendarCard({
   );
 }
 
-export function NextUpCard({
-  event,
-  onPress,
-}: {
-  event: CalendarEvent;
-  onPress?: () => void;
-}) {
+export function NextUpCard({ event, onPress }: { event: CalendarEvent; onPress?: () => void }) {
   const { palette } = useTheme();
   const styles = useThemedStyles(makeStyles);
 

@@ -5,7 +5,6 @@ import { HttpError, writeJSON } from "./responses.mjs";
 const log = moduleLogger("http");
 
 const corsHeaders = Object.freeze({
-  "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-EVE-User-ID",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Max-Age": "86400",
@@ -30,8 +29,19 @@ const productionOnlyHeaders = Object.freeze({
 
 /**
  * @param {import("node:http").ServerResponse} response
+ * @param {import("node:http").IncomingMessage} [request]
  */
-export function applySecurityHeaders(response) {
+export function applySecurityHeaders(response, request) {
+  const origin = request?.headers?.origin;
+  const allowedOrigins = config.corsOrigins || [];
+  if (allowedOrigins.length > 0) {
+    if (typeof origin === "string" && allowedOrigins.includes(origin)) {
+      response.setHeader("Access-Control-Allow-Origin", origin);
+      response.setHeader("Vary", "Origin");
+    }
+  } else if (!config.isProduction) {
+    response.setHeader("Access-Control-Allow-Origin", "*");
+  }
   for (const [k, v] of Object.entries(corsHeaders)) response.setHeader(k, v);
   for (const [k, v] of Object.entries(baseSecurityHeaders)) response.setHeader(k, v);
   if (config.isProduction) {
@@ -45,6 +55,15 @@ export function applySecurityHeaders(response) {
  */
 export function handlePreflight(request, response) {
   if (request.method !== "OPTIONS") return false;
+  const allowedOrigins = config.corsOrigins || [];
+  if (
+    allowedOrigins.length > 0 &&
+    (typeof request.headers.origin !== "string" || !allowedOrigins.includes(request.headers.origin))
+  ) {
+    response.writeHead(403);
+    response.end();
+    return true;
+  }
   response.writeHead(204);
   response.end();
   return true;
@@ -58,18 +77,32 @@ export function handlePreflight(request, response) {
  * @param {import("node:http").ServerResponse} response
  */
 export function writeErrorResponse(error, request, response) {
+  const url = redactURL(request.url);
   if (response.headersSent) {
-    log.error({ err: error, url: request.url }, "error after headers sent");
+    log.error({ err: error, url }, "error after headers sent");
     response.destroy();
     return;
   }
-  if (error instanceof HttpError) {
-    if (error.status >= 500) log.error({ err: error, url: request.url }, "http 5xx");
-    else log.warn({ status: error.status, msg: error.message, url: request.url }, "http error");
-    writeJSON(response, error.status, { error: error.message });
+  const status = Number(/** @type {{ status?: unknown }} */ (error)?.status);
+  if (error instanceof HttpError || (Number.isInteger(status) && status >= 400 && status <= 599)) {
+    const code = error instanceof HttpError ? error.status : status;
+    if (code >= 500) log.error({ err: error, url }, "http 5xx");
+    else
+      log.warn(
+        { status: code, msg: error instanceof Error ? error.message : String(error), url },
+        "http error",
+      );
+    writeJSON(response, code, {
+      error:
+        config.isProduction && code >= 500
+          ? "internal error"
+          : error instanceof Error
+            ? error.message
+            : String(error),
+    });
     return;
   }
-  log.error({ err: error, url: request.url }, "unhandled error");
+  log.error({ err: error, url }, "unhandled error");
   writeJSON(response, 500, { error: config.isProduction ? "internal error" : String(error) });
 }
 
@@ -82,7 +115,7 @@ export function writeErrorResponse(error, request, response) {
 export function logRequest(request, response) {
   const start = process.hrtime.bigint();
   const method = request.method;
-  const url = request.url;
+  const url = redactURL(request.url);
   response.once("finish", () => {
     const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
     log.info(
@@ -95,4 +128,22 @@ export function logRequest(request, response) {
       "request",
     );
   });
+}
+
+/**
+ * Query strings routinely contain OAuth codes, state nonces, and installation
+ * tokens. Keep the route visible for diagnostics, but never put caller-
+ * supplied query values into logs.
+ *
+ * @param {string | undefined} value
+ */
+export function redactURL(value) {
+  if (typeof value !== "string" || !value) return "";
+  try {
+    const parsed = new URL(value, "http://localhost");
+    for (const key of parsed.searchParams.keys()) parsed.searchParams.set(key, "[redacted]");
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return value.split("?", 1)[0] || "/";
+  }
 }

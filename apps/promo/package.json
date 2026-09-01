@@ -1,0 +1,25 @@
+{
+  "name": "@eve/promo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "node scripts/render.mjs",
+    "render:preview": "node scripts/render.mjs --preview",
+    "build:web-render": "esbuild src/web-render.tsx --bundle --format=iife --platform=browser --loader:.png=dataurl --loader:.jpg=dataurl --outfile=web-render/app.js",
+    "render:browser": "pnpm build:web-render && node scripts/render-browser.mjs",
+    "render:browser:preview": "pnpm build:web-render && node scripts/render-browser.mjs --preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.509",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "remotion": "4.0.509"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.10",
+    "typescript": "~5.9.2"
+  }
+}

@@ -91,7 +91,7 @@ const BIRTH = 0.14;
  * a blue the rest of the product has no use for, and borrowing `danger` for pink
  * would mean a future change to the error colour silently restyles EVE.
  */
-const HUES = ["#b9a0ff", "#ffa3d4", "#8fcdff", "#d9c8ff"] as const;
+const HUES = ["#2ee6a6", "#2acbff", "#5274ff", "#b05cff"] as const;
 
 /** Seconds for one full life. Thinking is quick and tight; speaking is lively. */
 const CYCLE_SECONDS: Record<FieldState, number> = {
@@ -561,14 +561,8 @@ const Mote = memo(function Mote({
     outputRange: [1, 1 + spread * spec.reach],
   });
 
-  const translateX = Animated.multiply(
-    clock.interpolate({ inputRange: INPUT, outputRange: path.x }),
-    push,
-  );
-  const translateY = Animated.multiply(
-    clock.interpolate({ inputRange: INPUT, outputRange: path.y }),
-    push,
-  );
+  const translateX = Animated.multiply(clock.interpolate({ inputRange: INPUT, outputRange: path.x }), push);
+  const translateY = Animated.multiply(clock.interpolate({ inputRange: INPUT, outputRange: path.y }), push);
 
   // Two things dim a mote, and they multiply: where it is in its life, and how
   // much energy the field carries. The first makes it appear and disappear, the

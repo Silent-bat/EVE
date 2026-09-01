@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EVE — Pitch Deck · Hub71</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+
+/* ── RESET & BASE ─────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #06080E;
+  --s1:       #0D1117;
+  --s2:       #121A24;
+  --s3:       #1A2535;
+  --gold:     #C8A96E;
+  --gold-lt:  #E2C98A;
+  --gold-dk:  #8A6E42;
+  --indigo:   #7B8AFF;
+  --coral:    #FF6B6B;
+  --teal:     #3DD9B3;
+  --text:     #E8EDF2;
+  --muted:    #5A6A7A;
+  --dim:      #1E2A38;
+  --border:   rgba(200,169,110,0.14);
+  --border2:  rgba(255,255,255,0.06);
+  --r:        10px;
+}
+
+html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; }
+
+/* ── SLIDES ───────────────────────────────────── */
+.deck { width: 100vw; height: 100vh; position: relative; }
+.slide {
+  position: absolute; inset: 0; overflow: hidden;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.55s cubic-bezier(0.4,0,0.2,1), transform 0.55s cubic-bezier(0.4,0,0.2,1);
+  transform: translateY(18px);
+}
+.slide.on { opacity: 1; pointer-events: all; transform: translateY(0); }
+
+/* ── AMBIENT AURA ─────────────────────────────── */
+.aura {
+  position: absolute; border-radius: 50%; pointer-events: none;
+  filter: blur(120px); mix-blend-mode: screen;
+}
+.aura-gold { width: 600px; height: 600px; background: radial-gradient(circle, rgba(200,169,110,0.18) 0%, transparent 70%); }
+.aura-indigo { width: 400px; height: 400px; background: radial-gradient(circle, rgba(123,138,255,0.12) 0%, transparent 70%); }
+
+/* ── GRID TEXTURE ─────────────────────────────── */
+.grid { position: absolute; inset: 0; pointer-events: none;
+  background-image: linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+/* ── PROGRESS ─────────────────────────────────── */
+.prog { position: fixed; top: 0; left: 0; height: 2px; background: linear-gradient(90deg, var(--gold-dk), var(--gold), var(--gold-lt)); transition: width 0.4s; z-index: 200; }
+
+/* ── CHROME ───────────────────────────────────── */
+.logo-fixed {
+  position: fixed; top: 22px; left: 28px; z-index: 100;
+  font-family: 'Cormorant Garamond', serif; font-weight: 400;
+  font-size: 20px; letter-spacing: 0.18em; color: var(--gold);
+}
+.slide-lbl { position: fixed; top: 24px; right: 28px; z-index: 100; font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); }
+
+.nav {
+  position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 12px;
+  background: rgba(13,17,23,0.85); backdrop-filter: blur(16px);
+  border: 1px solid var(--border); border-radius: 50px;
+  padding: 9px 18px; z-index: 100;
+}
+.nav button { background: none; border: none; cursor: pointer; font-family: 'DM Sans', sans-serif; font-size: 12px; color: var(--muted); padding: 3px 8px; border-radius: 20px; transition: all 0.2s; }
+.nav button:hover { color: var(--text); }
+.nav .arr { background: var(--s2); color: var(--text); width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; padding: 0; }
+.nav .arr:hover { background: var(--gold); color: var(--bg); }
+.nav .ctr { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); min-width: 40px; text-align: center; }
+
+.dots { position: fixed; right: 24px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 7px; z-index: 100; }
+.dot { width: 5px; height: 5px; border-radius: 50%; background: var(--dim); cursor: pointer; transition: all 0.3s; }
+.dot.on { background: var(--gold); transform: scale(1.6); }
+
+/* ── TYPOGRAPHY ───────────────────────────────── */
+.serif { font-family: 'Cormorant Garamond', serif; }
+.mono  { font-family: 'DM Mono', monospace; }
+.eyebrow { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--gold); display: block; margin-bottom: 10px; }
+.display { font-family: 'Cormorant Garamond', serif; font-weight: 400; line-height: 0.93; }
+.body-text { font-size: 14px; line-height: 1.75; color: rgba(232,237,242,0.65); }
+
+/* ── LAYOUT ───────────────────────────────────── */
+.pad { padding: 52px 64px; position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; justify-content: center; }
+.pad-sm { padding: 44px 64px; position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; justify-content: center; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
+.three-col { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.four-col { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+
+.hdr { margin-bottom: 28px; }
+.hdr h2 { font-size: clamp(32px, 4.5vw, 52px); color: var(--text); }
+
+/* ── CARDS ────────────────────────────────────── */
+.card { background: var(--s1); border: 1px solid var(--border2); border-radius: var(--r); padding: 18px 20px; }
+.card-g { border-left: 2px solid var(--gold); border-radius: 0 var(--r) var(--r) 0; }
+.card-i { border-left: 2px solid var(--indigo); border-radius: 0 var(--r) var(--r) 0; }
+.card-c { border-left: 2px solid var(--coral); border-radius: 0 var(--r) var(--r) 0; }
+.card-t { border-left: 2px solid var(--teal); border-radius: 0 var(--r) var(--r) 0; }
+.card h4 { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 5px; }
+.card p { font-size: 12px; color: var(--muted); line-height: 1.6; }
+
+.stat { background: var(--s1); border: 1px solid var(--border2); border-radius: var(--r); padding: 16px 18px; }
+.stat .val { font-family: 'Cormorant Garamond', serif; font-size: 40px; font-weight: 500; color: var(--gold); line-height: 1; }
+.stat .lbl { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+
+/* ── FLOW ─────────────────────────────────────── */
+.flow { display: flex; flex-direction: column; }
+.fstep { display: flex; gap: 14px; align-items: flex-start; }
+.fleft { display: flex; flex-direction: column; align-items: center; }
+.fnum { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--gold-dk); display: flex; align-items: center; justify-content: center; font-size: 11px; font-family: 'DM Mono', monospace; color: var(--gold); flex-shrink: 0; }
+.fline { width: 1px; flex: 1; min-height: 16px; background: var(--dim); margin: 3px 0; }
+.fbody { padding-bottom: 20px; flex: 1; }
+.fbody h5 { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 2px; }
+.fbody p { font-size: 12px; color: var(--muted); }
+
+/* ── TABLE ────────────────────────────────────── */
+.comp-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.comp-table th { font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.08em; color: var(--muted); padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border2); }
+.comp-table td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.03); color: var(--muted); }
+.comp-table tr.eve td { color: var(--text); background: rgba(200,169,110,0.05); }
+.comp-table tr.eve td:first-child { border-left: 2px solid var(--gold); color: var(--gold); }
+.yes { color: var(--teal); }
+.no  { color: var(--coral); }
+.par { color: #B8860B; }
+
+/* ── TIMELINE ─────────────────────────────────── */
+.tl { position: relative; padding-left: 26px; }
+.tl::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 1px; background: var(--dim); }
+.tlitem { position: relative; margin-bottom: 18px; }
+.tlitem::before { content: ''; position: absolute; left: -30px; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+.tlitem.done::before { background: var(--teal); }
+.tlitem.now::before  { background: var(--gold); box-shadow: 0 0 8px var(--gold); }
+.tlitem.next::before { background: var(--indigo); }
+.tlweek { font-size: 10px; color: var(--muted); font-family: 'DM Mono', monospace; margin-bottom: 2px; letter-spacing: 0.08em; }
+.tltext { font-size: 12px; color: rgba(232,237,242,0.7); line-height: 1.6; }
+
+/* ── PRICING ──────────────────────────────────── */
+.price-wrap { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+.pcrd { background: var(--s1); border: 1px solid var(--border2); border-radius: var(--r); padding: 20px; position: relative; }
+.pcrd.feat { border-color: var(--gold); }
+.feat-badge { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: var(--gold); color: var(--bg); font-size: 9px; font-weight: 600; padding: 2px 10px; border-radius: 20px; font-family: 'DM Mono', monospace; letter-spacing: 0.08em; white-space: nowrap; }
+.pname { font-size: 10px; color: var(--muted); font-family: 'DM Mono', monospace; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 8px; }
+.pval { font-family: 'Cormorant Garamond', serif; font-size: 36px; font-weight: 400; color: var(--text); }
+.pval span { font-size: 13px; font-family: 'DM Sans', sans-serif; color: var(--muted); font-weight: 300; }
+.pfeats { margin-top: 14px; display: flex; flex-direction: column; gap: 5px; }
+.pfeats li { font-size: 11px; color: var(--muted); list-style: none; display: flex; gap: 6px; line-height: 1.5; }
+.pfeats li::before { content: '→'; color: var(--gold); font-size: 10px; flex-shrink: 0; margin-top: 1px; }
+
+/* ── DIVIDER ──────────────────────────────────── */
+hr.thin { border: none; border-top: 1px solid var(--border2); margin: 16px 0; }
+
+/* ── SLIDE 1 — COVER ──────────────────────────── */
+#s1 { background: radial-gradient(ellipse 90% 70% at 40% 50%, #0D1B2A 0%, var(--bg) 65%); }
+.cover-wrap { display: flex; flex-direction: column; justify-content: center; height: 100%; position: relative; z-index: 1; padding: 0 64px; }
+.cover-eyebrow { display: flex; align-items: center; gap: 10px; margin-bottom: 36px; }
+.pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--gold); animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.4)} }
+.cover-eyebrow span { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--gold); letter-spacing: 0.12em; }
+.eve-wordmark { font-family: 'Cormorant Garamond', serif; font-size: clamp(110px, 18vw, 200px); font-weight: 300; letter-spacing: -0.02em; line-height: 0.85; color: var(--text); }
+.eve-wordmark em { color: var(--gold); font-style: normal; }
+.cover-tagline { font-family: 'Cormorant Garamond', serif; font-size: clamp(18px, 2.5vw, 26px); font-weight: 300; font-style: italic; color: rgba(200,169,110,0.7); margin-top: 20px; max-width: 540px; }
+.cover-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 32px; }
+.pill { background: var(--s2); border: 1px solid var(--border); border-radius: 4px; padding: 4px 12px; font-size: 11px; color: var(--muted); font-family: 'DM Mono', monospace; }
+
+/* ── SLIDE 2 — PROBLEM ────────────────────────── */
+#s2 .big-q { font-family: 'Cormorant Garamond', serif; font-size: clamp(24px, 3.8vw, 44px); font-weight: 300; font-style: italic; line-height: 1.35; max-width: 580px; border-left: 2px solid var(--coral); padding-left: 24px; color: var(--text); margin-bottom: 32px; }
+
+/* ── SLIDE 6 — MARKET BARS ────────────────────── */
+.mbar { margin-bottom: 16px; }
+.mbar-label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; }
+.mbar-label span:last-child { font-family: 'DM Mono', monospace; color: var(--gold); }
+.mbar-track { height: 6px; background: var(--dim); border-radius: 3px; overflow: hidden; }
+.mbar-fill { height: 100%; border-radius: 3px; }
+
+/* ── HUB71 SLIDE ──────────────────────────────── */
+.hub-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.hub-card { background: var(--s1); border: 1px solid var(--border); border-radius: var(--r); padding: 18px 20px; }
+.hub-card h4 { font-size: 13px; font-weight: 500; color: var(--gold); margin-bottom: 6px; }
+.hub-card p { font-size: 12px; color: var(--muted); line-height: 1.6; }
+
+/* ── ASK SLIDE ────────────────────────────────── */
+.ask-num { font-family: 'Cormorant Garamond', serif; font-size: clamp(72px, 12vw, 130px); font-weight: 300; color: var(--gold); line-height: 0.9; }
+.use-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin-top: 28px; }
+.use-item { background: var(--s1); border: 1px solid var(--border2); border-radius: var(--r); padding: 14px; text-align: center; }
+.use-pct { font-family: 'Cormorant Garamond', serif; font-size: 28px; color: var(--indigo); }
+.use-lbl { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+/* ── TAG ──────────────────────────────────────── */
+.tag { display: inline-block; font-size: 10px; font-weight: 500; padding: 2px 9px; border-radius: 20px; font-family: 'DM Mono', monospace; letter-spacing: 0.05em; }
+.tg { background: rgba(61,217,179,0.12); color: var(--teal); }
+.ti { background: rgba(123,138,255,0.12); color: var(--indigo); }
+.to { background: rgba(200,169,110,0.12); color: var(--gold); }
+.tc { background: rgba(255,107,107,0.12); color: var(--coral); }
+
+</style>
+
+<style id="print-override">
+@page { size: 1920px 1080px; margin: 0; }
+html, body { overflow: visible !important; height: auto !important; }
+.deck { width: 1920px !important; height: auto !important; }
+.slide { position: relative !important; inset: auto !important; opacity: 1 !important; transform: none !important; pointer-events: none !important; width: 1920px; height: 1080px !important; page-break-after: always; break-after: page; }
+.nav, .dots, .prog, .logo-fixed, .slide-lbl { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="prog" id="prog"></div>
+<div class="logo-fixed">EVE</div>
+<div class="slide-lbl" id="lbl">01 / 12</div>
+<div class="dots" id="dots"></div>
+
+<div class="deck" id="deck">
+
+<!-- ════════════════════════════════════════
+     SLIDE 1 — COVER
+══════════════════════════════════════════ -->
+<div class="slide on" id="s1">
+  <div class="grid"></div>
+  <div class="aura aura-gold" style="top:-100px;left:-120px"></div>
+  <div class="aura aura-indigo" style="bottom:-80px;right:-60px"></div>
+  <div class="cover-wrap">
+    <div class="cover-eyebrow">
+      <div class="pulse"></div>
+      <span>Hub71 Application · Abu Dhabi · 2026</span>
+    </div>
+    <div class="eve-wordmark">E<em>V</em>E</div>
+    <div class="cover-tagline">The ambient intelligence that thinks about your life — so you don't have to.</div>
+    <div class="cover-pills">
+      <span class="pill">Ambient AI Agent</span>
+      <span class="pill">Voice-First</span>
+      <span class="pill">Graph Memory</span>
+      <span class="pill">Mobile-Native</span>
+      <span class="pill">B2C SaaS</span>
+      <span class="pill">Pre-Seed</span>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SLIDE 2 — PROBLEM
+══════════════════════════════════════════ -->
+<div class="slide" id="s2">
+  <div class="grid"></div>
+  <div class="aura aura-gold" style="top:-60px;right:-80px;opacity:.5"></div>
+  <div class="pad">
+    <div class="hdr">
+      <span class="eyebrow">01 — Problem</span>
+      <h2 class="display">The digital world demands more<br>attention than any human has.</h2>
+    </div>
+    <div class="big-q">"I spend the first two hours of every morning just figuring out what I'm supposed to do — before I do any actual work."<br><span style="font-size:13px;font-style:normal;color:var(--muted);font-family:'DM Sans',sans-serif;display:block;margin-top:8px;">— Every professional we interviewed</span></div>
+    <div class="three-col">
+      <div class="stat"><div class="val">2.5h</div><div class="lbl">Lost daily to inbox triage, calendar management & context-switching</div></div>
+      <div class="stat"><div class="val">147</div><div class="lbl">Average emails received per day by a professional in 2026</div></div>
+      <div class="stat"><div class="val">73%</div><div class="lbl">Of professionals feel overwhelmed by digital communication daily</div></div>
+    </div>
+    <div class="body-text" style="margin-top:20px;max-width:640px">
+      OpenClaw/Moltbot proved the demand: <strong style="color:var(--text)">145,000 GitHub stars in three weeks</strong>. But it was desktop-only, required a self-hosted server, stored credentials in plaintext, and cost users $300+/month to run. The problem is real. Nobody has solved it correctly — especially not on mobile.
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SLIDE 3 — SOLUTION
+══════════════════════════════════════════ -->
+<div class="slide" id="s3">
+  <div class="grid"></div>
+  <div class="aura aura-gold" style="top:-80px;left:-60px;opacity:.6"></div>
+  <div class="pad">
+    <div class="hdr">
+      <span class="eyebrow">02 — Solution & Value Proposition</span>
+      <h2 class="display">EVE doesn't wait to be asked.<br>She already knows.</h2>
+    </div>
+    <div class="two-col">
+      <div>
+        <p class="body-text" style="margin-bottom:20px">EVE is the world's first ambient AI agent designed for mobile — a persistent intelligence that lives on your phone, monitors your digital life server-side, and proactively reaches out when something needs your attention.</p>
+        <p class="body-text" style="margin-bottom:20px">She speaks. She listens. She remembers — not as raw transcripts, but through a graph-structured knowledge model that gets sharper the longer you use her, without ever slowing down or costing more.</p>
+        <div style="display:flex;flex-direction:column;gap:10px;margin-top:20px">
+          <div class="card card-g"><h4>Proactive — she contacts you first</h4><p>When an urgent email arrives or a meeting approaches, EVE taps you on the shoulder. Not a notification. A conversation.</p></div>
+          <div class="card card-i"><h4>Voice-native — natural conversation</h4><p>Sub-400ms response latency. Barge-in support. Natural hesitations and rhythm. The uncanny valley of AI voice, solved.</p></div>
+          <div class="card card-t"><h4>Graph memory — gets smarter over time</h4><p>A versioned knowledge graph, not a flat vector store. Precise, auditable, and bounded — so a power user after 8 months costs the same as a new user.</p></div>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="border:1px solid var(--border);padding:24px;position:relative;overflow:hidden">
+          <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--gold-dk),var(--gold),var(--gold-lt))"></div>
+          <div style="font-size:11px;color:var(--gold);font-family:'DM Mono',monospace;margin-bottom:20px;letter-spacing:0.08em">EVE IN ACTION — 8:03 PM</div>
+          <div class="flow">
+            <div class="fstep"><div class="fleft"><div class="fnum">1</div><div class="fline"></div></div><div class="fbody"><h5>EVE detects a pattern</h5><p>Interview tomorrow at 9am. Project Atlas — no activity in 7 days. Correlation flagged.</p></div></div>
+            <div class="fstep"><div class="fleft"><div class="fnum">2</div><div class="fline"></div></div><div class="fbody"><h5>EVE initiates conversation</h5><p>"Hey — big day tomorrow. How's Project Atlas going? I had a few feature ideas I wanted to run by you."</p></div></div>
+            <div class="fstep"><div class="fleft"><div class="fnum">3</div><div class="fline"></div></div><div class="fbody"><h5>Live voice brainstorm</h5><p>A full conversational session — EVE surfaces ideas, asks questions, builds on the user's answers in real time.</p></div></div>
+            <div class="fstep"><div class="fleft"><div class="fnum">4</div></div><div class="fbody"><h5>Memory updates silently</h5><p>New decisions, new facts — compressed into the graph for next time. Zero extra cost, zero user friction.</p></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SLIDE 4 — PRODUCT / TECHNOLOGY
+══════════════════════════════════════════ -->
+<div class="slide" id="s4">
+  <div class="grid"></div>
+  <div class="aura aura-indigo" style="bottom:-60px;right:-80px;opacity:.5"></div>
+  <div class="pad-sm">
+    <div class="hdr">
+      <span class="eyebrow">03 — Technology</span>
+      <h2 class="display">Three layers. One seamless experience.</h2>
+    </div>
+    <div class="two-col" style="gap:32px;align-items:start">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="card card-g">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><h4>Context Compiler</h4><span class="tag to">Core IP</span></div>
+          <p>A deterministic Go service that assembles a fixed-size context package — Tier 1 (identity core, pre-cached), Tier 2 (graph-retrieved situational context), Tier 3 (live turn). A power user with 8 months of history gets the same prompt size and latency as a new user. More history → better curation, not bigger cost.</p>
+        </div>
+        <div class="card card-i">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><h4>Graph Memory Engine</h4><span class="tag ti">Moat</span></div>
+          <p>A versioned knowledge graph in PostgreSQL — entities, relationships, temporal edges. 80% of queries resolve via pure graph traversal (zero embedding cost). Vector search as fallback for fuzzy queries only. Memory is transparent — users see and edit what EVE knows.</p>
+        </div>
+        <div class="card card-t">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><h4>Voice Pipeline</h4><span class="tag tg">V2</span></div>
+          <p>LiveKit WebRTC transport + ElevenLabs Turbo TTS with streaming chunk synthesis. Sentence-boundary buffering starts audio within 400ms. Silero VAD on-device for instant barge-in. OpenAI Realtime API for voice-to-voice mode when latency is the priority.</p>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="background:var(--s1);border:1px solid var(--border2);border-radius:var(--r);padding:18px">
+          <div class="eyebrow" style="margin-bottom:12px">Model tiering strategy</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--s2);border-radius:6px">
+              <span style="font-size:12px;color:var(--muted)">Triage polling (15min)</span>
+              <span class="tag tg">Haiku — $0.001/call</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--s2);border-radius:6px">
+              <span style="font-size:12px;color:var(--muted)">Morning briefing</span>
+              <span class="tag to">Sonnet — $0.03/call</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--s2);border-radius:6px">
+              <span style="font-size:12px;color:var(--muted)">Voice conversation</span>
+              <span class="tag to">Sonnet — streaming</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--s2);border-radius:6px">
+              <span style="font-size:12px;color:var(--muted)">Proactive brainstorm</span>
+              <span class="tag ti">Opus — rare, high-value</span>
+            </div>
+          </div>
+        </div>
+        <div style="background:var(--s1);border:1px solid var(--border2);border-radius:var(--r);padding:18px">
+          <div class="eyebrow" style="margin-bottom:12px">Stack</div>
+          <div style="display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted)">
+            <div style="display:flex;gap:10px"><span style="color:var(--text);min-width:80px;font-family:'DM Mono',monospace;font-size:11px">MOBILE</span><span>React Native + Expo (iOS + Android)</span></div>
+            <div style="display:flex;gap:10px"><span style="color:var(--text);min-width:80px;font-family:'DM Mono',monospace;font-size:11px">BACKEND</span><span>Go + Fiber — goroutines for 10K+ concurrent WS</span></div>
+            <div style="display:flex;gap:10px"><span style="color:var(--text);min-width:80px;font-family:'DM Mono',monospace;font-size:11px">JOBS</span><span>Asynq (Redis-backed) — scheduled agent tasks</span></div>
+            <div style="display:flex;gap:10px"><span style="color:var(--text);min-width:80px;font-family:'DM Mono',monospace;font-size:11px">DATA</span><span>PostgreSQL + pgvector + sqlc</span></div>
+            <div style="display:flex;gap:10px"><span style="color:var(--text);min-width:80px;font-family:'DM Mono',monospace;font-size:11px">INFRA</span><span>Fly.io edge — sub-100ms from MENA</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SLIDE 5 — COMPETITION
+══════════════════════════════════════════ -->
+<div class="slide" id="s5">
+  <div class="grid"></div>
+  <div class="pad-sm">
+    <div class="hdr">
+      <span class="eyebrow">04 — Competition</span>
+      <h2 class="display">The quadrant nobody<br>is building.</h2>
+    </div>
+    <div class="two-col" style="align-items:start;gap:32px">
+      <div>
+        <div style="overflow:auto">
+          <table class="comp-table">
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th>Mobile</th>
+                <th>Proactive</th>
+                <th>Voice</th>
+                <th>Graph memory</th>
+                <th>Managed</th>
+                <th>&lt;$20/mo</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="eve">
+                <td><strong>EVE</strong></td>
+                <td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td>
+                <td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td>
+              </tr>
+              <tr>
+                <td>OpenClaw</td>
+                <td class="no">✗</td><td class="par">~</td><td class="no">✗</td>
+                <td class="no">✗</td><td class="no">✗</td><td class="no">✗</td>
+              </tr>
+              <tr>
+                <td>Hermes Agent</td>
+                <td class="par">~</td><td class="par">~</td><td class="no">✗</td>
+                <td class="no">✗</td><td class="no">✗</td><td class="no">✗</td>
+              </tr>
+              <tr>
+                <td>ChatGPT</td>
+                <td class="par">~</td><td class="no">✗</td><td class="par">~</td>
+                <td class="no">✗</td><td class="yes">✓</td><td class="par">~</td>
+              </tr>
+              <tr>
+                <td>Superhuman</td>
+                <td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td>
+                <td class="no">✗</td><td class="yes">✓</td><td class="no">✗</td>
+              </tr>
+              <tr>
+                <td>Gemini Live</td>
+                <td class="yes">✓</td><td class="no">✗</td><td class="yes">✓</td>
+                <td class="no">✗</td><td class="yes">✓</td><td class="yes">✓</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="body-text" style="margin-top:16px">The <strong style="color:var(--text)">proactive + mobile + voice + graph memory + managed</strong> combination is completely unoccupied. Every competitor owns at most two of these attributes.</p>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="card card-g">
+          <h4>vs OpenClaw / Hermes</h4>
+          <p>Both require self-hosting, BYOK, and technical setup. Their "mobile" story is a remote viewer for a server the user runs themselves. EVE requires zero setup and bundles API costs in the subscription.</p>
+        </div>
+        <div class="card card-i">
+          <h4>vs ChatGPT / Gemini</h4>
+          <p>Reactive by design — they wait to be asked. No proactive interruptions, no graph memory that persists across sessions in a structured form, no ambient phone presence. They're tools, not agents.</p>
+        </div>
+        <div class="card card-c">
+          <h4>vs Big Tech's roadmap</h4>
+          <p>Google and Apple will ship something eventually. EVE's moat is the mobile-first African and MENA market — 2 billion users Big Tech has structurally ignored — plus the Context Compiler and graph memory architecture that can't be replicated in a "feature drop."</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SLIDE 6 — MARKET
+══════════════════════════════════════════ -->
+<div class="slide" id="s6">
+  <div class="grid"></div>
+  <div class="aura aura-gold" style="bottom:-80px;left:-60px;opacity:.4"></div>
+  <div class="pad">
+    <div class="hdr">
+      <span class="eyebrow">05 — Market</span>
+      <h2 class="display">A category being born.<br>A region being ignored.</h2>
+    </div>
+    <div class="two-col">
+      <div>
+        <div style="margin-bottom:24px">
+          <div class="mbar"><div class="mbar-label"><span class="body-text" style="font-size:12px">TAM — AI Personal Productivity (global)</span><span>$42B by 2028</span></div><div class="mbar-track"><div class="mbar-fill" style="width:100%;background:linear-gradient(90deg,var(--gold-dk),var(--gold))"></div></div></div>
+          <div class="mbar"><div class="mbar-label"><span class="body-text" style="font-size:12px">SAM — Mobile AI Agents</span><span>$8.5B by 2027</span></div><div class="mbar-track"><div class="mbar-fill" style="width:60%;background:var(--indigo)"></div></div></div>
+          <div class="mbar"><div class="mbar-label"><span class="body-text" style="font-size:12px">SOM — Reachable in 24 months</span><span>$120M</span></div><div class="mbar-track"><div class="mbar-fill" style="width:18%;background:var(--teal)"></div></div></div>
+        </div>
+        <div class="card card-g">
+          <h4>$370M invested in ambient agent infrastructure in 2025–26</h4>
+          <p>The deployment phase is 2026–2028. The window to establish category position is open — but it is closing. EVE is built to move now.</p>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="background:rgba(200,169,110,0.06);border:1px solid var(--border);border-radius:var(--r);padding:20px">
+          <div class="eyebrow" style="margin-bottom:10px">Strategic beachhead — MENA + Africa</div>
+          <p class="body-text" style="font-size:12px;margin-bottom:12px">500M+ smartphone users across MENA and Sub-Saharan Africa. Mobile-first by necessity. WhatsApp as the communication OS. Massive underserved demand for AI productivity tools that actually work on Android.</p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <div class="stat" style="flex:1;min-width:80px;padding:10px"><div class="val" style="font-size:26px">500M+</div><div class="lbl">MENA + Africa smartphone users</div></div>
+            <div class="stat" style="flex:1;min-width:80px;padding:10px"><div class="val" style="font-size:26px">$32B</div><div class="lbl">MENA digital economy by 2030</div></div>
+          </div>
+        </div>
+        <div class="card card-i">
+          <h4>Abu Dhabi as global AI hub</h4>
+          <p>UAE National AI Strategy 2031, G42 ecosystem, Mubadala's global tech portfolio — Abu Dhabi is the ideal launchpad for an AI company targeting emerging mobile markets. Hub71's network provides what no other accelerator in the world can: direct access to the world's fastest-growing tech capital.</p>
+        </div>
+        <div class="card card-t">
+          <h4>OpenClaw proved the demand signal</h4>
+          <p>145K GitHub stars. $16M in fraudulent crypto tokens exploiting the hype. Three rebrands in one week. The demand is beyond dispute. No clean mobile product has captured it.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SLIDE 7 — BUSINESS MODEL
+══════════════════════════════════════════ -->
+<div class="slide" id="s7">
+  <div class="grid"></div>
+  <div class="pad">
+    <div class="hdr">
+      <span class="eyebrow">06 — Business Model</span>
+      <h2 class="display">~80% gross margin.<br>From day one.</h2>
+    </div>
+    <div class="price-wrap" style="margin-bottom:24px">
+      <div class="pcrd">
+        <div class="pname">Starter</div>
+        <div class="pval">$0 <span>/ 7 days</span></div>
+        <ul class="pfeats">
+          <li>Gmail + Calendar</li>
+          <li>1 briefing/day</li>
+          <li>5 reply approvals</li>
+          <li>No credit card</li>
+        </ul>
+      </div>
+      <div class="pcrd feat">
+        <div class="feat-badge">Most popular</div>
+        <div class="pname">Pro</div>
+        <div class="pval">$12 <span>/ month</span></div>
+        <ul class="pfeats">
+          <li>Unlimited approvals</li>
+          <li>Custom briefing time</li>
+          <li>Proactive EVE interrupts (V2)</li>
+          <li>Voice conversations (V2)</li>
+          <li>Transparent memory graph</li>
+        </ul>
+      </div>
+      <div class="pcrd">
+        <div class="pname">Power</div>
+        <div class="pval">$19 <span>/ month</span></div>
+        <ul class="pfeats">
+          <li>Everything in Pro</li>
+          <li>Outlook + Slack</li>
+          <li>Bring your own API key</li>
+          <li>Multiple briefing slots</li>
+          <li>Voice-to-voice mode</li>
+        </ul>
+      </div>
+    </div>
+    <div class="three-col">
+      <div class="stat"><div class="val">≤$0.08</div><div class="lbl">Max LLM cost per user per day — enforced at infra level</div></div>
+      <div class="stat"><div class="val">~80%</div><div class="lbl">Gross margin on LLM costs at Pro tier. $2.40/month in API costs.</div></div>
+      <div class="stat"><div class="val">$36K</div><div class="lbl">MRR target at month 12 — 3,000 users, seed-round-ready metrics</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SLIDE 8 — TRACTION
+══════════════════════════════════════════ -->
+<div class="slide" id="s8">
+  <div class="grid"></div>
+  <div class="aura aura-indigo" style="top:-80px;right:-60px;opacity:.5"></div>
+  <div class="pad">
+    <div class="hdr">
+      <span class="eyebrow">07 — Traction & Validation</span>
+      <h2 class="display">Proof before product.</h2>
+    </div>
+    <div class="two-col" style="align-items:start;gap:32px">
+      <div>
+        <div class="tl">
+          <div class="tlitem done">
+            <div class="tlweek">Week 0 — Complete</div>
+            <div class="tltext">Cost validation: LLM simulation confirmed ≤$0.07/user/day at full daily usage — within budget model.</div>
+          </div>
+          <div class="tlitem done">
+            <div class="tlweek">Week 1 — Complete</div>
+            <div class="tltext">12 pre-paying users at $9 upfront from a Figma mockup and 60-second demo video. Validates willingness to pay before a line of product code was written.</div>
+          </div>
+          <div class="tlitem now">
+            <div class="tlweek">Now — In Progress</div>
+            <div class="tltext">Backend foundation: Go + Fiber + Asynq scaffold. Gmail OAuth integrated. Claude Sonnet briefing generation running in staging with 3 beta users.</div>
+          </div>
+          <div class="tlitem next">
+            <div class="tlweek">Week 5 — Target</div>
+            <div class="tltext">App store submission (iOS + Android). Landing page live. Launch to 50-person waitlist built organically from the demo video.</div>
+          </div>
+          <div class="tlitem next">
+            <div class="tlweek">Month 2 — Target</div>
+            <div class="tltext">100 paying users · $1.2K MRR · D7 retention &gt;55%</div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="background:rgba(200,169,110,0.06);border:1px solid var(--border);border-radius:var(--r);padding:20px">
+          <div class="eyebrow" style="margin-bottom:14px">Market demand signals</div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:12px;color:var(--muted)">OpenClaw GitHub stars (3 weeks)</span>
+              <span style="font-family:'Cormorant Garamond',serif;font-size:22px;color:var(--gold)">145K</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:12px;color:var(--muted)">Fraudulent tokens exploiting hype</span>
+              <span style="font-family:'Cormorant Garamond',serif;font-size:22px;color:var(--gold)">$16M</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:12px;color:var(--muted)">Ambient agent VC investment 2025–26</span>
+              <span style="font-family:'Cormorant Garamond',serif;font-size:22px;color:var(--gold)">$370M</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:12px;color:var(--muted)">EVE pre-paying users (pre-product)</span>
+              <span style="font-family:'Cormorant Garamond',serif;font-size:22px;color:var(--teal)">12</span>
+            </div>
+          </div>
+        </div>
+        <div class="card card-g">
+          <h4>North star metric</h4>
+          <p>Weekly Active Approvals per user — how many times a user approves an EVE-drafted reply per week. Measures genuine utility, not vanity opens. Every churned user gets a DM within 24 hours.</p>
+        </div>
+        <div class="card card-i">
+          <h4>Technical proof points</h4>
+          <p>Context Compiler producing fixed-size packages regardless of memory size. Graph traversal confirmed at &lt;10ms for 2-hop queries. Go goroutine WebSocket server handling 1,000 concurrent test connections on a $6/month Fly.io machine.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SLIDE 9 — FOUNDING TEAM
+══════════════════════════════════════════ -->
+<div class="slide" id="s9">
+  <div class="grid"></div>
+  <div class="aura aura-gold" style="bottom:-60px;left:-40px;opacity:.4"></div>
+  <div class="pad">
+    <div class="hdr">
+      <span class="eyebrow">08 — Founding Team</span>
+      <h2 class="display">Built by someone who<br>lives the problem.</h2>
+    </div>
+    <div class="two-col" style="align-items:start;gap:40px">
+      <div>
+        <div style="display:flex;gap:18px;align-items:flex-start;margin-bottom:22px">
+          <div style="width:60px;height:60px;border-radius:50%;background:linear-gradient(135deg,var(--gold-dk),var(--gold));display:flex;align-items:center;justify-content:center;font-family:'Cormorant Garamond',serif;font-size:22px;color:var(--bg);flex-shrink:0">RK</div>
+          <div>
+            <div style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:400;color:var(--text)">Rosnel Kana</div>
+            <div style="font-family:'DM Mono',monospace;font-size:11px;color:var(--gold);margin-top:2px;letter-spacing:0.05em">Founder & CEO</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px">Douala, Cameroon</div>
+          </div>
+        </div>
+        <p class="body-text" style="margin-bottom:16px">Fullstack engineer with 6+ years building scalable web and AI-driven systems. Former Technical Development Manager at Next Venture Tech. Currently building at the intersection of AI, mobile, and infrastructure — the exact convergence EVE requires.</p>
+        <p class="body-text" style="margin-bottom:20px">Based in Douala — one of West Africa's most dynamic tech cities — Rosnel builds for mobile-first markets from the inside. That's not a marketing angle. It's a structural advantage.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:7px">
+          <span class="tag to">React Native</span><span class="tag to">Go</span><span class="tag to">NestJS</span>
+          <span class="tag to">TypeScript</span><span class="tag to">PostgreSQL</span><span class="tag to">AI Integration</span>
+          <span class="tag to">Web3</span><span class="tag to">System Architecture</span>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="background:rgba(200,169,110,0.06);border:1px solid var(--border);border-radius:var(--r);padding:20px">
+          <div class="eyebrow" style="margin-bottom:14px">Proven shipping record</div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div class="card" style="background:var(--s2)">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <h4>EduFlowAI</h4><span class="tag tg">Live</span>
+              </div>
+              <p>AI-powered school ERP platform. 500+ active users. End-to-end build: product design → backend → mobile app → deployment.</p>
+            </div>
+            <div class="card" style="background:var(--s2)">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <h4>SecureWatch</h4><span class="tag ti">In progress</span>
+              </div>
+              <p>Blockchain-based luxury watch authentication platform. Smart contract service layer, NFT history, fractional ownership — solving trust in a $75B market.</p>
+            </div>
+          </div>
+        </div>
+        <div class="card card-g">
+          <h4>Why this founder for this product</h4>
+          <p>EVE requires Go concurrency, React Native mobile, PostgreSQL graph queries, LLM streaming, and WebRTC voice — all of which Rosnel has shipped in production. The stack is not new territory. The product is.</p>
+        </div>
+        <div class="card card-i">
+          <h4>Actively seeking</h4>
+          <p>A co-founder with GTM and growth background, ideally MENA-based. Hub71's network is a direct path to this. EVE's long-term roadmap also includes a Head of AI Research role once seed is closed.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SLIDE 10 — FUNDRAISING HISTORY
+══════════════════════════════════════════ -->
+<div class="slide" id="s10">
+  <div class="grid"></div>
+  <div class="pad">
+    <div class="hdr">
+      <span class="eyebrow">09 — Fundraising History</span>
+      <h2 class="display">Bootstrapped to proof.<br>Now ready to scale.</h2>
+    </div>
+    <div class="two-col" style="align-items:start;gap:32px">
+      <div>
+        <div style="background:var(--s1);border:1px solid var(--border2);border-radius:var(--r);padding:24px;margin-bottom:14px">
+          <div class="eyebrow" style="margin-bottom:16px">Previous rounds</div>
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <div style="display:flex;gap:16px;align-items:flex-start">
+              <div style="width:40px;height:40px;border-radius:50%;background:var(--s2);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:'Cormorant Garamond',serif;font-size:16px;color:var(--gold);flex-shrink:0">F0</div>
+              <div>
+                <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:2px">Bootstrapped — $0 raised</div>
+                <div style="font-size:12px;color:var(--muted);line-height:1.6">EVE has been built entirely from personal resources and revenue from consulting work. No dilution to date. Full founder control. Every architectural decision made for product quality, not investor optics.</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:16px;align-items:flex-start">
+              <div style="width:40px;height:40px;border-radius:50%;background:var(--s2);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:'Cormorant Garamond',serif;font-size:16px;color:var(--gold);flex-shrink:0">F1</div>
+              <div>
+                <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:2px">Pre-revenue validation — 12 paying users</div>
+                <div style="font-size:12px;color:var(--muted);line-height:1.6">12 users paid $9 upfront for a Figma mockup before product was built. This is the most capital-efficient form of market validation: real money from real people before a line of product code existed.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card card-g">
+          <h4>What bootstrapping proves</h4>
+          <p>The architecture, the PRD, the cost model, and the initial traction were built with zero outside capital. The discipline required to do this — validating before building, designing for unit economics from day one — is the same discipline that will make EVE a capital-efficient investment.</p>
+        </div>
+      </div>
+      <div>
+        <div style="background:rgba(200,169,110,0.06);border:1px solid var(--border);border-radius:var(--r);padding:24px">
+          <div class="eyebrow" style="margin-bottom:16px">Cap table — current</div>
+          <div style="margin-bottom:20px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <span style="font-size:12px;color:var(--text)">Rosnel Kana (Founder)</span>
+              <span style="font-family:'Cormorant Garamond',serif;font-size:24px;color:var(--gold)">100%</span>
+            </div>
+            <div style="height:6px;background:var(--gold);border-radius:3px;margin-bottom:4px"></div>
+            <div style="font-size:11px;color:var(--muted)">Fully undiluted. Pre-seed round will be the first dilutive event.</div>
+          </div>
+          <hr class="thin">
+          <div class="eyebrow" style="margin:16px 0 12px">Post-round cap table (target)</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--s2);border-radius:6px">
+              <span style="font-size:12px;color:var(--text)">Rosnel Kana</span>
+              <span style="font-family:'DM Mono',monospace;font-size:12px;color:var(--gold)">85%</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--s2);border-radius:6px">
+              <span style="font-size:12px;color:var(--text)">Hub71 / Lead investor</span>
+              <span style="font-family:'DM Mono',monospace;font-size:12px;color:var(--indigo)">10%</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--s2);border-radius:6px">
+              <span style="font-size:12px;color:var(--text)">ESOP pool (future hires)</span>
+              <span style="font-family:'DM Mono',monospace;font-size:12px;color:var(--muted)">5%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SLIDE 11 — THE ASK / NEXT ROUND
+══════════════════════════════════════════ -->
+<div class="slide" id="s11">
+  <div class="grid" style="opacity:.2"></div>
+  <div class="aura aura-gold" style="top:-60px;left:-60px;opacity:.7"></div>
+  <div class="aura aura-indigo" style="bottom:-80px;right:-60px;opacity:.5"></div>
+  <div class="pad" style="justify-content:center">
+    <div style="max-width:680px">
+      <span class="eyebrow">10 — Next Fundraising</span>
+      <div class="ask-num">$150K</div>
+      <p class="body-text" style="margin:12px 0 28px;max-width:520px">Pre-seed round via SAFE. 18-month runway. Enough to ship V1, reach $36K MRR, and raise a $1M+ seed on real traction — not a deck.</p>
+      <div class="use-grid">
+        <div class="use-item"><div class="use-pct">45%</div><div class="use-lbl">Product & Engineering — V1 mobile + backend</div></div>
+        <div class="use-item"><div class="use-pct">30%</div><div class="use-lbl">Infrastructure & API costs — Fly.io + LLM budget</div></div>
+        <div class="use-item"><div class="use-pct">25%</div><div class="use-lbl">GTM, community, distribution — MENA launch</div></div>
+      </div>
+      <div style="margin-top:24px;background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:20px">
+        <div style="display:flex;justify-content:space-around;gap:20px">
+          <div style="text-align:center"><div style="font-family:'Cormorant Garamond',serif;font-size:28px;color:var(--text)">10%</div><div style="font-size:11px;color:var(--muted);margin-top:2px">equity offered</div></div>
+          <div style="width:1px;background:var(--border2)"></div>
+          <div style="text-align:center"><div style="font-family:'Cormorant Garamond',serif;font-size:28px;color:var(--text)">$1.5M</div><div style="font-size:11px;color:var(--muted);margin-top:2px">valuation cap</div></div>
+          <div style="width:1px;background:var(--border2)"></div>
+          <div style="text-align:center"><div style="font-family:'Cormorant Garamond',serif;font-size:28px;color:var(--text)">SAFE</div><div style="font-size:11px;color:var(--muted);margin-top:2px">instrument</div></div>
+          <div style="width:1px;background:var(--border2)"></div>
+          <div style="text-align:center"><div style="font-family:'Cormorant Garamond',serif;font-size:28px;color:var(--text)">M12</div><div style="font-size:11px;color:var(--muted);margin-top:2px">seed-ready metrics</div></div>
+        </div>
+      </div>
+      <p class="body-text" style="margin-top:16px;font-size:13px">At month 12 with 3,000 users and $36K MRR, EVE raises a $1M+ seed to accelerate the MENA market, add Outlook/Slack integrations, launch the Voice V2 pipeline, and hire the first two engineers.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SLIDE 12 — HUB71 & ABU DHABI
+══════════════════════════════════════════ -->
+<div class="slide" id="s12">
+  <div class="grid"></div>
+  <div class="aura aura-gold" style="top:-40px;right:-60px;opacity:.5"></div>
+  <div class="pad-sm">
+    <div class="hdr">
+      <span class="eyebrow">11 — Plans for Hub71 & Abu Dhabi</span>
+      <h2 class="display">Abu Dhabi isn't a stop.<br>It's the launchpad.</h2>
+    </div>
+    <div class="two-col" style="align-items:start;gap:24px">
+      <div>
+        <p class="body-text" style="margin-bottom:20px">Hub71 sits at the intersection of everything EVE needs: capital access, regulatory clarity, the Mubadala/G42 ecosystem for enterprise pilots, and a direct bridge to the fastest-growing mobile-first user base in the world — MENA's 400M+ young professionals.</p>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div class="hub-card">
+            <h4>Year 1 — Establish MENA as primary market</h4>
+            <p>Launch Arabic language support and localized onboarding within 90 days of joining Hub71. Target UAE and Saudi Arabia as first paid markets outside Africa — high-income, mobile-first, underserved by US-centric productivity tools.</p>
+          </div>
+          <div class="hub-card">
+            <h4>Enterprise pilots via G42 & Mubadala network</h4>
+            <p>EVE's graph memory and proactive agent architecture has a natural B2B extension — a version for executive assistants managing C-suite communications. Hub71's network provides direct access to enterprise pilot partners that would take 2 years to reach cold.</p>
+          </div>
+          <div class="hub-card">
+            <h4>Regulatory clarity for AI + voice products</h4>
+            <p>UAE's AI regulatory framework is among the most progressive globally. Operating from Abu Dhabi gives EVE clear legal standing for voice data processing and AI agent capabilities across MENA — a compliance moat vs competitors operating from outside the region.</p>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style="background:rgba(200,169,110,0.06);border:1px solid var(--border);border-radius:var(--r);padding:20px;margin-bottom:14px">
+          <div class="eyebrow" style="margin-bottom:14px">What EVE needs from Hub71</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;gap:10px;align-items:flex-start;padding:10px;background:var(--s2);border-radius:6px">
+              <span style="color:var(--gold);font-size:16px;flex-shrink:0">→</span>
+              <div><div style="font-size:12px;font-weight:500;color:var(--text);margin-bottom:2px">Co-founder matching</div><div style="font-size:11px;color:var(--muted)">MENA-based GTM / growth co-founder with regional network</div></div>
+            </div>
+            <div style="display:flex;gap:10px;align-items:flex-start;padding:10px;background:var(--s2);border-radius:6px">
+              <span style="color:var(--gold);font-size:16px;flex-shrink:0">→</span>
+              <div><div style="font-size:12px;font-weight:500;color:var(--text);margin-bottom:2px">Enterprise pilot introductions</div><div style="font-size:11px;color:var(--muted)">3-5 pilot companies from Mubadala / G42 portfolio for B2B proof</div></div>
+            </div>
+            <div style="display:flex;gap:10px;align-items:flex-start;padding:10px;background:var(--s2);border-radius:6px">
+              <span style="color:var(--gold);font-size:16px;flex-shrink:0">→</span>
+              <div><div style="font-size:12px;font-weight:500;color:var(--text);margin-bottom:2px">AI infrastructure partnerships</div><div style="font-size:11px;color:var(--muted)">G42 / G42 Cloud for Fly.io equivalent edge infrastructure in UAE</div></div>
+            </div>
+            <div style="display:flex;gap:10px;align-items:flex-start;padding:10px;background:var(--s2);border-radius:6px">
+              <span style="color:var(--gold);font-size:16px;flex-shrink:0">→</span>
+              <div><div style="font-size:12px;font-weight:500;color:var(--text);margin-bottom:2px">Seed follow-on network</div><div style="font-size:11px;color:var(--muted)">Warm introductions to regional VCs for the $1M+ seed at month 12</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="card card-g">
+          <h4>What Hub71 gets from EVE</h4>
+          <p>A mobile-first AI agent company building for the 2 billion users Big Tech structurally ignores — with a technical architecture that can't be replicated as a feature drop, a founder who ships, and a product that earns its right to exist from day one through real revenue, not hype.</p>
+        </div>
+        <div style="margin-top:14px;text-align:center;padding:16px;background:var(--s1);border:1px solid var(--border);border-radius:var(--r)">
+          <div style="font-family:'Cormorant Garamond',serif;font-size:13px;color:var(--muted);margin-bottom:6px">Reach Rosnel</div>
+          <div style="font-size:13px;color:var(--text)">linkedin.com/in/rosnelkana &nbsp;·&nbsp; github.com/Silent-bat</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /deck -->
+
+<!-- NAV -->
+<div class="nav">
+  <button class="arr" onclick="go(-1)">←</button>
+  <span class="ctr" id="ctr">1 / 12</span>
+  <button class="arr" onclick="go(1)">→</button>
+</div>
+
+<script>
+const slides = document.querySelectorAll('.slide');
+const total = slides.length;
+let cur = 0;
+
+const dotsEl = document.getElementById('dots');
+slides.forEach((_,i)=>{
+  const d = document.createElement('div');
+  d.className = 'dot'+(i===0?' on':'');
+  d.onclick = ()=>goto(i);
+  dotsEl.appendChild(d);
+});
+
+function goto(n){
+  slides[cur].classList.remove('on');
+  dotsEl.children[cur].classList.remove('on');
+  cur = Math.max(0,Math.min(total-1,n));
+  slides[cur].classList.add('on');
+  dotsEl.children[cur].classList.add('on');
+  document.getElementById('prog').style.width=((cur+1)/total*100)+'%';
+  const lbl=String(cur+1).padStart(2,'0')+' / '+String(total).padStart(2,'0');
+  document.getElementById('lbl').textContent=lbl;
+  document.getElementById('ctr').textContent=(cur+1)+' / '+total;
+}
+
+function go(d){goto(cur+d);}
+
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'||e.key==='ArrowDown')go(1);
+  if(e.key==='ArrowLeft'||e.key==='ArrowUp')go(-1);
+});
+
+document.getElementById('prog').style.width=(1/total*100)+'%';
+</script>
+</body>
+</html>

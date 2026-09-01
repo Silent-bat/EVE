@@ -26,6 +26,20 @@ export function resolveAPIBaseURL(): string {
   return `http://127.0.0.1:${DEFAULT_LAN_API_PORT}`;
 }
 
+/** Release builds must never put bearer tokens on a cleartext connection. */
+export function assertSecureTransport(url: string): void {
+  if (__DEV__) return;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("EVE is not configured with a valid API URL.");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error("EVE requires an HTTPS API URL in release builds.");
+  }
+}
+
 export const config = Object.freeze({
   apiBaseURL: resolveAPIBaseURL(),
   isExpoGo: Constants.appOwnership === "expo",

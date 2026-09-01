@@ -25,6 +25,7 @@
  */
 import EventEmitter from "node:events";
 import { WebSocket } from "ws";
+import { config } from "../config.mjs";
 import { moduleLogger } from "../logger.mjs";
 
 const log = moduleLogger("voice.live");
@@ -37,6 +38,7 @@ const ENDPOINT =
 // bidiGenerateContent as a supported method). Override via
 // GEMINI_LIVE_MODEL to test newer preview variants.
 const DEFAULT_MODEL = process.env.GEMINI_LIVE_MODEL || "gemini-3.1-flash-live-preview";
+const MAX_ERROR_CHARS = 4_000;
 
 /**
  * @typedef {Object} GeminiLiveOptions
@@ -64,6 +66,11 @@ export class GeminiLiveSession extends EventEmitter {
     /** @type {WebSocket | null} */
     this.ws = null;
     this.connected = false;
+    this.setupReady = false;
+    /** @type {(() => void) | null} */
+    this.setupResolve = null;
+    /** @type {((error: Error) => void) | null} */
+    this.setupReject = null;
     this.closed = false;
   }
 
@@ -73,23 +80,81 @@ export class GeminiLiveSession extends EventEmitter {
    * implicit by the first incoming serverContent).
    */
   async connect() {
-    const url = `${ENDPOINT}?key=${this.apiKey}`;
-    this.ws = new WebSocket(url);
+    // Authenticate the upstream handshake with a header. Putting the API key
+    // in the URL leaks it into WebSocket/proxy access logs and connection
+    // diagnostics; `ws` preserves this header during the TLS upgrade.
+    this.ws = new WebSocket(ENDPOINT, {
+      headers: { "x-goog-api-key": this.apiKey },
+    });
+    this.closed = false;
+    this.connected = false;
+    this.setupReady = false;
 
     return new Promise((resolve, reject) => {
       const ws = /** @type {WebSocket} */ (this.ws);
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        ws.off("open", onOpen);
+        ws.off("error", onErrorBeforeOpen);
+        this.setupResolve = null;
+        this.setupReject = null;
+        this.connected = false;
+        try {
+          /** @type {{ terminate?: () => void }} */ (/** @type {unknown} */ (ws)).terminate?.();
+        } catch {
+          /* best-effort */
+        }
+        reject(new Error("Gemini Live setup timed out"));
+      }, config.outboundTimeoutMs);
+      timeout.unref?.();
       const onOpen = () => {
+        if (settled) return;
         ws.off("error", onErrorBeforeOpen);
         this.connected = true;
-        this.sendSetup();
+        // TCP open is not enough: Gemini may still reject or be parsing the
+        // setup payload. Hold the client handshake until setup_complete.
+        this.setupResolve = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          this.setupReady = true;
+          this.setupResolve = null;
+          this.setupReject = null;
+          this.emit("open");
+          resolve(undefined);
+        };
+        this.setupReject = (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          this.connected = false;
+          this.setupReady = false;
+          this.setupResolve = null;
+          this.setupReject = null;
+          try {
+            /** @type {{ terminate?: () => void }} */ (/** @type {unknown} */ (ws)).terminate?.();
+          } catch {
+            /* best-effort */
+          }
+          reject(error);
+        };
         this.attachHandlers();
-        this.emit("open");
-        resolve(undefined);
+        this.sendSetup();
       };
-      const onErrorBeforeOpen = (/** @type {Error} */ err) => {
+      const onErrorBeforeOpen = (/** @type {unknown} */ err) => {
+        if (settled) return;
+        settled = true;
         ws.off("open", onOpen);
-        log.warn({ userID: this.userID, err: err.message }, "gemini live connect failed");
-        reject(err);
+        this.connected = false;
+        this.setupReady = false;
+        this.setupResolve = null;
+        this.setupReject = null;
+        clearTimeout(timeout);
+        const message = normalizeLiveError(err, "Gemini Live connection failed");
+        log.warn({ userID: this.userID, err: message }, "gemini live connect failed");
+        reject(new Error(message));
       };
       ws.once("open", onOpen);
       ws.once("error", onErrorBeforeOpen);
@@ -126,7 +191,22 @@ export class GeminiLiveSession extends EventEmitter {
       log.debug({ userID: this.userID }, "drop send: ws not open");
       return;
     }
-    this.ws.send(JSON.stringify(message));
+    const bufferedAmount =
+      /** @type {{ bufferedAmount?: number }} */ (/** @type {unknown} */ (this.ws)).bufferedAmount || 0;
+    if (bufferedAmount > 1024 * 1024) {
+      const error = new Error("Gemini Live upstream backpressure limit exceeded");
+      log.warn({ userID: this.userID }, error.message);
+      this.emit("error", error);
+      this.close();
+      return;
+    }
+    try {
+      this.ws.send(JSON.stringify(message));
+    } catch (error) {
+      const message = normalizeLiveError(error, "Gemini Live send failed");
+      log.warn({ userID: this.userID, err: message }, "gemini live send failed");
+      this.emit("error", new Error(message));
+    }
   }
 
   /**
@@ -168,8 +248,23 @@ export class GeminiLiveSession extends EventEmitter {
     this.send({ realtime_input: { audio_stream_end: true } });
   }
 
+  /**
+   * Ask Gemini to stop the current response. Live's wire protocol models an
+   * interruption as a new realtime activity; an empty activity marker is
+   * enough to cancel generation without manufacturing user text.
+   */
+  interrupt() {
+    this.send({ realtime_input: { activity_start: {} } });
+  }
+
   close() {
     this.closed = true;
+    this.connected = false;
+    this.setupReady = false;
+    const rejectSetup = this.setupReject;
+    this.setupResolve = null;
+    this.setupReject = null;
+    rejectSetup?.(new Error("Gemini Live session closed before setup completed"));
     if (this.ws && this.ws.readyState <= WebSocket.OPEN) {
       try {
         this.ws.close();
@@ -185,27 +280,41 @@ export class GeminiLiveSession extends EventEmitter {
       /** @type {any} */
       let msg;
       try {
-        msg = JSON.parse(raw.toString());
+        const text = typeof raw?.toString === "function" ? raw.toString() : "";
+        msg = JSON.parse(text);
       } catch (err) {
-        log.warn({ userID: this.userID, err: /** @type {Error} */ (err).message }, "non-JSON message from gemini");
+        log.warn(
+          { userID: this.userID, err: normalizeLiveError(err, "invalid provider message") },
+          "non-JSON message from gemini",
+        );
+        return;
+      }
+      if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
+        log.warn({ userID: this.userID }, "invalid provider message shape");
         return;
       }
       this.handleServerMessage(msg);
     });
-    ws.on("error", (/** @type {Error} */ err) => {
-      log.warn({ userID: this.userID, err: err.message }, "gemini live ws error");
-      this.emit("error", err);
+    ws.on("error", (/** @type {unknown} */ err) => {
+      const message = normalizeLiveError(err, "Gemini Live websocket error");
+      const normalized = new Error(message);
+      log.warn({ userID: this.userID, err: message }, "gemini live ws error");
+      this.setupReject?.(normalized);
+      this.emit("error", normalized);
     });
     ws.on("close", (/** @type {number} */ code, /** @type {Buffer} */ reasonBuf) => {
       const reason = reasonBuf?.toString?.() || "";
       log.info({ userID: this.userID, code, reason }, "gemini live ws closed");
       this.connected = false;
+      this.setupReady = false;
+      this.setupReject?.(new Error(`Gemini Live closed during setup (${code})`));
       this.emit("close", { code, reason });
     });
   }
 
   /** @param {any} msg */
   handleServerMessage(msg) {
+    if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
     // Gemini's v1beta wire format is protobuf-derived: field names come
     // back as snake_case (setup_complete, server_content, tool_call,
     // model_turn, inline_data, mime_type, input_transcription, ...).
@@ -214,26 +323,28 @@ export class GeminiLiveSession extends EventEmitter {
     const setupComplete = msg.setup_complete || msg.setupComplete;
     if (setupComplete) {
       log.info({ userID: this.userID }, "gemini setup_complete");
+      this.setupResolve?.();
       return;
     }
 
     const content = msg.server_content || msg.serverContent;
     if (content) {
       const modelTurn = content.model_turn || content.modelTurn;
-      const parts = modelTurn?.parts || [];
+      const parts = Array.isArray(modelTurn?.parts) ? modelTurn.parts : [];
       for (const part of parts) {
+        if (!part || typeof part !== "object" || Array.isArray(part)) continue;
         const inline = part.inline_data || part.inlineData;
-        if (inline?.data) {
+        if (typeof inline?.data === "string" && inline.data) {
           this.emit("audio", inline.data);
-        } else if (part.text) {
+        } else if (typeof part.text === "string" && part.text) {
           this.emit("outputTranscript", part.text);
         }
       }
       const inputT = content.input_transcription || content.inputTranscription;
-      if (inputT?.text) this.emit("inputTranscript", inputT.text);
+      if (typeof inputT?.text === "string" && inputT.text) this.emit("inputTranscript", inputT.text);
 
       const outputT = content.output_transcription || content.outputTranscription;
-      if (outputT?.text) this.emit("outputTranscript", outputT.text);
+      if (typeof outputT?.text === "string" && outputT.text) this.emit("outputTranscript", outputT.text);
 
       if (content.turn_complete || content.turnComplete) this.emit("turnComplete");
       if (content.interrupted) this.emit("interrupted");
@@ -258,32 +369,65 @@ export class GeminiLiveSession extends EventEmitter {
    * @param {{ functionCalls?: any[], function_calls?: any[] }} toolCall
    */
   async handleToolCall(toolCall) {
-    const calls = toolCall.function_calls || toolCall.functionCalls || [];
+    if (!toolCall || typeof toolCall !== "object" || Array.isArray(toolCall)) return;
+    const calls = Array.isArray(toolCall.function_calls)
+      ? toolCall.function_calls
+      : Array.isArray(toolCall.functionCalls)
+        ? toolCall.functionCalls
+        : [];
     if (calls.length === 0) return;
 
     /** @type {Array<{ id: string, name: string, response: { result: any } }>} */
     const responses = [];
     for (const call of calls) {
+      if (!call || typeof call !== "object" || Array.isArray(call)) {
+        log.warn({ userID: this.userID }, "ignoring malformed Gemini tool call");
+        continue;
+      }
+      const name = typeof call.name === "string" ? call.name.slice(0, 200) : "";
+      const id = typeof call.id === "string" ? call.id.slice(0, 200) : "";
+      if (!name || !id) {
+        log.warn({ userID: this.userID }, "ignoring incomplete Gemini tool call");
+        continue;
+      }
       let result;
       try {
         if (this.onToolCall) {
-          result = await this.onToolCall(call.name, call.args || {});
+          result = await this.onToolCall(name, call.args || {});
         } else {
           result = { error: "no tool dispatcher configured" };
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.warn({ userID: this.userID, tool: call.name, err: message }, "tool dispatch failed");
+        const message = normalizeLiveError(err, "tool dispatch failed");
+        log.warn({ userID: this.userID, tool: name, err: message }, "tool dispatch failed");
         result = { error: message };
       }
       responses.push({
-        id: call.id,
-        name: call.name,
+        id,
+        name,
         response: { result: result ?? null },
       });
-      this.emit("toolCallResult", { id: call.id, name: call.name, result });
+      this.emit("toolCallResult", { id, name, result });
     }
 
     this.send({ tool_response: { function_responses: responses } });
   }
+}
+
+/**
+ * Convert arbitrary provider failures to a bounded, non-throwing message.
+ * Provider adapters and EventEmitter test doubles are not required to emit
+ * native `Error` instances, and hostile custom values can throw from coercion.
+ *
+ * @param {unknown} error
+ * @param {string} fallback
+ */
+function normalizeLiveError(error, fallback) {
+  try {
+    if (error instanceof Error && error.message) return String(error.message).slice(0, MAX_ERROR_CHARS);
+    if (typeof error === "string" && error.trim()) return error.trim().slice(0, MAX_ERROR_CHARS);
+  } catch {
+    // best-effort normalization only
+  }
+  return fallback;
 }

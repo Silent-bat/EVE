@@ -19,12 +19,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
 import { Alert, BackHandler, StyleSheet, Text, View } from "react-native";
 
-import type {
-  DeviceNotification,
-  Preferences,
-  ProactiveCategoryName,
-  Session,
-} from "../types";
+import type { DeviceNotification, Preferences, ProactiveCategoryName, Session } from "../types";
 import { startAvailableNow, stopAvailableNow } from "../proactive/api";
 import { AvailableNowSheet } from "../proactive/AvailableNowSheet";
 import { summarizeProactive, useProactivePrefs } from "../proactive/useProactivePrefs";
@@ -32,12 +27,7 @@ import { summarizeProfile, useProfile } from "../profile/useProfile";
 import { UserAvatar, describeError } from "../ui/components";
 import { PressableScale } from "../ui/motion";
 import { HIT_SLOP, MIN_TOUCH, spacing } from "../ui/theme";
-import {
-  useTheme,
-  useThemedStyles,
-  type AppearancePreference,
-  type ThemeValue,
-} from "../ui/ThemeContext";
+import { useTheme, useThemedStyles, type AppearancePreference, type ThemeValue } from "../ui/ThemeContext";
 import { SettingsGroup, SettingsRowItem, SettingsSwitch } from "./rows";
 import { AccountPage } from "./pages/AccountPage";
 import { AppearancePage } from "./pages/AppearancePage";
@@ -90,6 +80,7 @@ type Props = {
   onUpdatePreferences: (next: Preferences) => void;
   onChangeBriefingTime: (next: string) => void;
   onOpenNotificationAccessSettings: () => void;
+  onClearNotifications: () => void | Promise<void>;
   onError: (message: string) => void;
   /**
    * Which page to land on. The sidebar sends people straight to Appearance or
@@ -123,6 +114,7 @@ export function SettingsTab({
   onUpdatePreferences,
   onChangeBriefingTime,
   onOpenNotificationAccessSettings,
+  onClearNotifications,
   onError,
   entry,
   onExit,
@@ -270,6 +262,7 @@ export function SettingsTab({
         enabled={notificationAccessEnabled}
         onBack={pop}
         onOpenAccessSettings={onOpenNotificationAccessSettings}
+        onClear={onClearNotifications}
       />
     );
   }
@@ -318,12 +311,7 @@ export function SettingsTab({
         accessibilityHint="Sign-in, connections, and deleting your data"
         style={styles.identity}
       >
-        <UserAvatar
-          photoURL={session.photoURL}
-          name={session.displayName}
-          email={session.email}
-          size="lg"
-        />
+        <UserAvatar photoURL={session.photoURL} name={session.displayName} email={session.email} size="lg" />
         <View style={styles.identityText}>
           <Text style={styles.identityName} numberOfLines={1}>
             {session.displayName || session.email || "EVE account"}
@@ -381,7 +369,7 @@ export function SettingsTab({
 
       <SettingsGroup
         title="Home"
-        footer="With this on, the microphone is open whenever the home screen is. EVE hears you, answers aloud, and starts listening again — no button to hold. She stops listening while she is speaking, and the pause control closes both the mic and the session."
+        footer="With this on, the microphone is open whenever the home screen is. EVE hears you, answers aloud, and keeps listening so you can interrupt her — no button to hold. The pause control closes both the mic and the session."
       >
         <SettingsRowItem
           icon="mic-outline"
@@ -468,7 +456,7 @@ function makeStyles({ type }: ThemeValue) {
       paddingRight: spacing.md,
     },
     exitLabel: { ...type.label, fontSize: 15 },
-    identityText: { flex: 1, gap: 2 },    // 16 rather than the title's 17: a full email address is the longest string
+    identityText: { flex: 1, gap: 2 }, // 16 rather than the title's 17: a full email address is the longest string
     // on the page and this is the size at which the common ones stop truncating.
     identityName: { ...type.title, fontSize: 16 },
     identityNote: { ...type.caption },

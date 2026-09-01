@@ -59,15 +59,7 @@ export function StatStrip({
   );
 }
 
-function Tile({
-  tile,
-  value,
-  onPress,
-}: {
-  tile: StatTile;
-  value: number;
-  onPress?: () => void;
-}) {
+function Tile({ tile, value, onPress }: { tile: StatTile; value: number; onPress?: () => void }) {
   const { palette } = useTheme();
   const styles = useThemedStyles(makeStyles);
 

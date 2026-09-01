@@ -8,11 +8,19 @@
 import crypto from "node:crypto";
 import { config } from "../config.mjs";
 import { httpError } from "../http/responses.mjs";
-import { ensureUserIn, getPool, LOCAL_USER_ID, save, state } from "../storage/index.mjs";
-import { hashPassword, hashToken, normalizeEmail, verifyPassword } from "./password.mjs";
+import {
+  assertUserID,
+  ensureUserIn,
+  getPool,
+  isValidUserID,
+  LOCAL_USER_ID,
+  save,
+  state,
+} from "../storage/index.mjs";
+import { hashPassword, hashToken, MAX_PASSWORD_CHARS, normalizeEmail, verifyPassword } from "./password.mjs";
 
 /**
- * @typedef {{ id: string, email: string, passwordHash: string }} AuthUser
+ * @typedef {{ id: string, email: string, passwordHash: string, passwordAuthEnabled?: boolean | null }} AuthUser
  * @typedef {{ id: string, email: string }} BasicUser
  * @typedef {{ userID: string, tokenHash: string }} SessionInfo
  */
@@ -29,6 +37,8 @@ export async function signup(input) {
   const password = String(input.password || "");
   if (!email) throw httpError(400, "email is required");
   if (password.length < 8) throw httpError(400, "password must be at least 8 characters");
+  if (password.length > MAX_PASSWORD_CHARS)
+    throw httpError(400, `password must be at most ${MAX_PASSWORD_CHARS} characters`);
 
   const passwordHash = await hashPassword(password);
   const userID = crypto.randomUUID();
@@ -36,11 +46,10 @@ export async function signup(input) {
 
   if (pool) {
     try {
-      await pool.query("insert into users (id, email, password_hash) values ($1, $2, $3)", [
-        userID,
-        email,
-        passwordHash,
-      ]);
+      await pool.query(
+        "insert into users (id, email, password_hash, password_auth_enabled) values ($1, $2, $3, true)",
+        [userID, email, passwordHash],
+      );
     } catch (error) {
       // Postgres unique_violation
       if (/** @type {{ code?: string }} */ (error).code === "23505") {
@@ -78,6 +87,11 @@ export async function login(input) {
 
   ensureUserIn(state, user.id);
   state.users[user.id].email = email;
+  state.users[user.id].passwordHash = user.passwordHash;
+  const pool = getPool();
+  if (pool && user.passwordAuthEnabled === null) {
+    await pool.query("update users set password_auth_enabled = true where id = $1", [user.id]);
+  }
   await save();
 
   const token = await createSession(user.id);
@@ -94,9 +108,23 @@ export async function login(input) {
 export async function findAuthUserByEmail(email) {
   const pool = getPool();
   if (pool) {
-    const result = await pool.query("select id, email, password_hash from users where email = $1", [email]);
+    const result = await pool.query(
+      `select id, email, password_hash, password_auth_enabled
+       from users
+       where email = $1
+         and password_hash is not null
+         and password_auth_enabled is distinct from false`,
+      [email],
+    );
     const row = result.rows[0];
-    return row ? { id: row.id, email: row.email, passwordHash: row.password_hash } : null;
+    return row
+      ? {
+          id: row.id,
+          email: row.email,
+          passwordHash: row.password_hash,
+          passwordAuthEnabled: row.password_auth_enabled ?? null,
+        }
+      : null;
   }
   const entry = Object.values(state.users).find((u) => u.email === email && u.passwordHash);
   return entry ? { id: entry.id, email: entry.email, passwordHash: entry.passwordHash } : null;
@@ -136,16 +164,24 @@ export async function ensureGoogleAuthUser(email, tokenPayload, profile = null) 
   if (!normalized) throw httpError(400, "google account did not return a verified email");
 
   const existing = await findUserByEmail(normalized);
-  const userID = existing?.id || crypto.randomUUID();
-  const passwordHash = await hashPassword(crypto.randomBytes(32).toString("base64url"));
+  let userID = existing?.id || crypto.randomUUID();
   const pool = getPool();
 
   if (pool && !existing) {
-    await pool.query("insert into users (id, email, password_hash) values ($1, $2, $3)", [
-      userID,
-      normalized,
-      passwordHash,
-    ]);
+    try {
+      await pool.query(
+        "insert into users (id, email, password_hash, password_auth_enabled) values ($1, $2, null, false)",
+        [userID, normalized],
+      );
+    } catch (error) {
+      // Two OAuth callbacks can race between the lookup and insert. The
+      // unique email constraint is the arbiter; attach this request to the
+      // account the winner created instead of returning a spurious 500.
+      if (/** @type {{ code?: string }} */ (error).code !== "23505") throw error;
+      const raced = await findUserByEmail(normalized);
+      if (!raced) throw error;
+      userID = raced.id;
+    }
   }
 
   ensureUserIn(state, userID);
@@ -183,6 +219,7 @@ export async function ensureGoogleAuthUser(email, tokenPayload, profile = null) 
  * @param {string} userID
  */
 export async function createSession(userID) {
+  assertUserID(userID);
   const token = crypto.randomBytes(32).toString("base64url");
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
@@ -220,8 +257,12 @@ export async function requireUserID(request) {
   const pool = getPool();
   if (!pool && !config.isProduction) {
     const header = request.headers["x-eve-user-id"];
-    if (typeof header === "string") return header;
-    if (Array.isArray(header) && header[0]) return header[0];
+    const candidate = Array.isArray(header) ? header[0] : header;
+    if (typeof candidate === "string") {
+      const userID = candidate.trim();
+      if (isValidUserID(userID)) return userID;
+      throw httpError(401, "invalid authentication");
+    }
     return LOCAL_USER_ID;
   }
   throw httpError(401, "authentication required");
@@ -245,12 +286,12 @@ export async function optionalSession(request) {
       [tokenHash],
     );
     const row = result.rows[0];
-    return row ? { userID: row.user_id, tokenHash } : null;
+    return row && isValidUserID(row.user_id) ? { userID: row.user_id, tokenHash } : null;
   }
 
   const session = state.sessions?.[tokenHash];
   if (!session || new Date(session.expiresAt).getTime() <= Date.now()) return null;
-  return { userID: session.userID, tokenHash };
+  return isValidUserID(session.userID) ? { userID: session.userID, tokenHash } : null;
 }
 
 /**

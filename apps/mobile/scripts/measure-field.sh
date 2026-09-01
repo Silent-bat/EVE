@@ -15,7 +15,7 @@
 #   median 27ms, 90th 40ms, ~2200 frames/30s, against a 16.7ms budget at 60Hz.
 set -uo pipefail
 
-PKG="${1:-com.eve.agent.dev}"
+PKG="${1:-com.eve.agent}"
 SECS="${2:-30}"
 ADB="${ADB:-$HOME/Library/Android/sdk/platform-tools/adb}"
 

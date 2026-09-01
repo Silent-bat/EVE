@@ -5,6 +5,7 @@ import { moduleLogger } from "../logger.mjs";
 import { state } from "../storage/index.mjs";
 import { googleJSON } from "./oauth.mjs";
 import { refreshGoogleToken } from "./api.mjs";
+import { encodeMimeBody, encodeMimeHeader, isValidEmailAddress, sanitizeHeaderValue } from "./address.mjs";
 
 const log = moduleLogger("google.email");
 
@@ -19,6 +20,12 @@ export async function deliverApprovedReply(userID, draft) {
   const user = state.users[userID];
   if (user?.connectionMode !== "google" || !user.googleTokens?.access_token) {
     return { status: "audit-only" };
+  }
+  if (!isValidEmailAddress(draft?.senderEmail)) {
+    return { status: "send-failed", error: "draft recipient email is invalid" };
+  }
+  if (typeof draft?.draftReply !== "string" || !draft.draftReply.trim()) {
+    return { status: "send-failed", error: "draft reply is empty" };
   }
 
   try {
@@ -45,16 +52,17 @@ export async function deliverApprovedReply(userID, draft) {
  *
  * @param {{ senderName: string, senderEmail: string, subject: string, draftReply: string }} draft
  */
-function replyRFC822(draft) {
-  const subject = draft.subject.toLowerCase().startsWith("re:") ? draft.subject : `Re: ${draft.subject}`;
+export function replyRFC822(draft) {
+  const rawSubject = sanitizeHeaderValue(draft?.subject, 998) || "(no subject)";
+  const subject = rawSubject.toLowerCase().startsWith("re:") ? rawSubject : `Re: ${rawSubject}`;
   return [
     `To: ${formatAddress(draft.senderName, draft.senderEmail)}`,
-    `Subject: ${sanitizeHeader(subject)}`,
+    `Subject: ${encodeMimeHeader(subject, 998)}`,
     "MIME-Version: 1.0",
     'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: 7bit",
+    "Content-Transfer-Encoding: base64",
     "",
-    draft.draftReply,
+    encodeMimeBody(draft.draftReply),
   ].join("\r\n");
 }
 
@@ -63,18 +71,12 @@ function replyRFC822(draft) {
  * @param {string} email
  */
 function formatAddress(name, email) {
-  const cleanEmail = sanitizeHeader(email || "unknown@example.com");
-  const cleanName = sanitizeHeader(name || "").replaceAll('"', "");
-  return cleanName ? `"${cleanName}" <${cleanEmail}>` : cleanEmail;
-}
-
-/**
- * @param {string} value
- */
-function sanitizeHeader(value) {
-  return String(value || "")
-    .replace(/[\r\n]+/g, " ")
-    .trim();
+  const cleanEmail = sanitizeHeaderValue(email, 254);
+  if (!isValidEmailAddress(cleanEmail)) throw new Error("draft recipient email is invalid");
+  const cleanName = encodeMimeHeader(name || "", 256);
+  if (!cleanName) return cleanEmail;
+  const quotedName = cleanName.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  return `"${quotedName}" <${cleanEmail}>`;
 }
 
 /**

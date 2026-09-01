@@ -9,18 +9,24 @@ import {
   writeErrorResponse,
 } from "./src/http/middleware.mjs";
 import { httpError, readJSON, writeAuthRedirect, writeHTML, writeJSON } from "./src/http/responses.mjs";
-import { dayKey } from "./src/utils/dates.mjs";
+import { dayKeyInZone } from "./src/utils/dates.mjs";
 import {
   close as closeStorage,
   ensureUserIn,
   initialize as initializeStorage,
+  isUserDeleted,
   isDatabaseConnected,
   purgeUser,
   save as saveState,
+  saveOAuthState,
   state,
   storageInfo,
 } from "./src/storage/index.mjs";
-import { normalizePreferences, sessionPayload as buildSessionPayload } from "./src/storage/state.mjs";
+import {
+  isValidUserID,
+  normalizePreferences,
+  sessionPayload as buildSessionPayload,
+} from "./src/storage/state.mjs";
 import {
   createSession,
   ensureGoogleAuthUser,
@@ -30,28 +36,32 @@ import {
   revokeSession,
   signup as authSignup,
 } from "./src/auth/index.mjs";
+import { normalizeNativeGoogleInput } from "./src/auth/google-native.mjs";
 import { normalizeEmail } from "./src/auth/password.mjs";
+import { changePassword, disconnectGoogle, revokeAllSessions, setDisplayName } from "./src/auth/account.mjs";
+import { enforceAuthRateLimit, enforceUserRateLimit } from "./src/auth/rate-limit.mjs";
 import {
-  changePassword,
-  disconnectGoogle,
-  revokeAllSessions,
-  setDisplayName,
-} from "./src/auth/account.mjs";
-import { enforceAuthRateLimit } from "./src/auth/rate-limit.mjs";
-import {
-  consumeGoogleOAuthState,
+  consumeGoogleOAuthStateDurable,
+  createOAuthHandoff,
+  consumeOAuthHandoffDurable,
   exchangeGoogleCode,
   fetchGoogleProfile,
   googleAuthURL,
   integrationMode,
+  MAX_OAUTH_CALLBACK_PARAM_CHARS,
+  MAX_RETURN_TO_CHARS,
 } from "./src/google/oauth.mjs";
 import { askAssistant } from "./src/briefing/assistant.mjs";
 import { actOnDraft } from "./src/briefing/drafts.mjs";
 import { generateBriefing, runDueBriefings } from "./src/briefing/generate.mjs";
 import { startGmailPollerLoop, sweepGmailPollers } from "./src/briefing/gmail-poller.mjs";
 import { getEmailBody } from "./src/briefing/messages.mjs";
-import { getDeviceNotifications, recordDeviceNotification } from "./src/notifications/index.mjs";
-import { registerPushToken } from "./src/notifications/push.mjs";
+import {
+  clearDeviceNotifications,
+  getDeviceNotifications,
+  recordDeviceNotification,
+} from "./src/notifications/index.mjs";
+import { registerPushToken, unregisterPushToken } from "./src/notifications/push.mjs";
 import {
   clearAvailableNow,
   dispatchProactive,
@@ -69,10 +79,13 @@ import { getProfile, updateProfile } from "./src/profile/index.mjs";
 const log = moduleLogger("server");
 const VERSION = "0.2.0";
 const startedAt = Date.now();
+const REQUEST_URL_BASE = "http://eve.invalid";
 
 await initializeStorage();
 
 function ensureUser(/** @type {string} */ userID) {
+  if (!isValidUserID(userID)) throw httpError(401, "invalid authentication");
+  if (isUserDeleted(userID)) throw httpError(401, "account has been deleted");
   ensureUserIn(state, userID);
 }
 
@@ -104,6 +117,58 @@ function clientIP(request) {
 }
 
 /**
+ * Parse the request target against a fixed, non-user-controlled origin. The
+ * Host header is routing metadata and must not become the parser's authority.
+ *
+ * @param {import("node:http").IncomingMessage} request
+ * @returns {URL}
+ */
+function requestURL(request) {
+  try {
+    return new URL(request.url || "/", REQUEST_URL_BASE);
+  } catch {
+    throw httpError(400, "invalid request URL");
+  }
+}
+
+/**
+ * Decode one path component while translating malformed percent escapes into a
+ * client error instead of an unhandled URIError/500.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
+function decodePathComponent(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw httpError(400, "invalid URL encoding");
+  }
+}
+
+/**
+ * Read a bounded positive integer query parameter. Empty values retain the
+ * route default; non-decimal, fractional, non-finite, and non-positive values
+ * are rejected rather than silently converted to another limit.
+ *
+ * @param {URL} url
+ * @param {string} name
+ * @param {number} fallback
+ * @param {number} maximum
+ */
+function positiveIntegerQuery(url, name, fallback, maximum) {
+  const raw = url.searchParams.get(name);
+  if (raw === null || raw.trim() === "") return fallback;
+  const value = raw.trim();
+  if (!/^\d+$/.test(value)) throw httpError(400, `${name} must be a positive integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw httpError(400, `${name} must be a positive integer`);
+  }
+  return Math.min(maximum, parsed);
+}
+
+/**
  * @param {any} input
  * @param {string} ip
  */
@@ -132,12 +197,14 @@ async function login(input, ip) {
  * @param {Record<string, any>} input
  */
 async function googleNativeLogin(input) {
-  const clientID = String(input.clientId || config.google?.androidClientId || "");
-  const accessToken = String(input.accessToken || "");
-  const serverAuthCode = String(input.serverAuthCode || "");
-  let refreshToken = String(input.refreshToken || "");
-  const idToken = String(input.idToken || "");
-  if (!accessToken) throw httpError(400, "google access token is required");
+  if (!config.google) {
+    // Native sign-in still needs the server's configured OAuth client so the
+    // returned Google identity can be associated with a durable Gmail grant.
+    // Do not turn an unconfigured deployment into an arbitrary userinfo proxy.
+    throw httpError(503, "google oauth is not configured");
+  }
+  const nativeInput = normalizeNativeGoogleInput(input, config.google);
+  const { accessToken, serverAuthCode, expiresIn } = nativeInput;
 
   // If the mobile client provided a serverAuthCode (offlineAccess: true
   // GoogleSignIn flow), exchange it for a real refresh token. Without
@@ -147,23 +214,23 @@ async function googleNativeLogin(input) {
   if (serverAuthCode && config.google?.clientSecret) {
     try {
       exchanged = await exchangeGoogleCode(serverAuthCode);
-      if (exchanged.refresh_token) refreshToken = exchanged.refresh_token;
     } catch (error) {
       log.warn({ err: error }, "google serverAuthCode exchange failed");
     }
   }
 
-  const profile = await fetchGoogleProfile(accessToken);
+  const verifiedAccessToken = exchanged?.access_token || accessToken;
+  const profile = await fetchGoogleProfile(verifiedAccessToken);
   const tokenPayload = {
-    access_token: exchanged?.access_token || accessToken,
-    ...(clientID ? { client_id: clientID } : {}),
-    ...(refreshToken ? { refresh_token: refreshToken } : {}),
-    ...(idToken ? { id_token: idToken } : {}),
-    token_type: input.tokenType || "Bearer",
-    scope: input.scope || "",
+    access_token: verifiedAccessToken,
+    // Refresh tokens are only accepted from the server-side auth-code
+    // exchange. Client-supplied refreshToken/idToken/scope fields are ignored.
+    ...(exchanged?.refresh_token ? { refresh_token: exchanged.refresh_token } : {}),
+    ...(config.google?.clientId ? { client_id: config.google.clientId } : {}),
+    token_type: "Bearer",
     expires_at: exchanged
-      ? Date.now() + Number(exchanged.expires_in || 3600) * 1000
-      : Date.now() + Number(input.expiresIn || 3600) * 1000,
+      ? Date.now() + boundedProviderExpiry(exchanged.expires_in) * 1000
+      : Date.now() + expiresIn * 1000,
   };
   const userID = await ensureGoogleAuthUser(profile.email, tokenPayload, profile);
   invalidateBriefingCache(userID);
@@ -180,7 +247,7 @@ async function googleNativeLogin(input) {
  * @param {string} userID
  */
 function invalidateBriefingCache(userID) {
-  const todayKey = dayKey(new Date());
+  const todayKey = dayKeyInZone(new Date(), state.users[userID]?.preferences?.timezone || "UTC");
   if (state.briefings[userID]?.[todayKey]) delete state.briefings[userID][todayKey];
   const user = state.users[userID];
   if (user) {
@@ -189,23 +256,47 @@ function invalidateBriefingCache(userID) {
   }
 }
 
+/** @param {unknown} value */
+function boundedProviderExpiry(value) {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) ? Math.max(60, Math.min(Math.floor(seconds), 3_600)) : 3_600;
+}
+
 const server = http.createServer(async (request, response) => {
-  applySecurityHeaders(response);
+  applySecurityHeaders(response, request);
   logRequest(request, response);
 
   try {
     if (handlePreflight(request, response)) return;
 
-    const url = new URL(request.url || "/", `http://${request.headers.host}`);
+    const url = requestURL(request);
 
     if (request.method === "GET" && (url.pathname === "/v1/health" || url.pathname === "/health")) {
+      const databaseConnected = await isDatabaseConnected();
       writeJSON(response, 200, {
         status: "ok",
         version: VERSION,
         uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
         mode: integrationMode(),
         storage: storageInfo(),
-        databaseConnected: await isDatabaseConnected(),
+        databaseConnected,
+      });
+      return;
+    }
+
+    if (request.method === "GET" && (url.pathname === "/v1/ready" || url.pathname === "/ready")) {
+      // Liveness stays 200 while an upstream database is recovering; readiness
+      // must fail so an orchestrator stops routing authenticated traffic to a
+      // process that cannot read or persist account state.
+      const databaseConnected = await isDatabaseConnected();
+      const ready = !config.databaseUrl || databaseConnected;
+      writeJSON(response, ready ? 200 : 503, {
+        status: ready ? "ready" : "not-ready",
+        version: VERSION,
+        uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+        mode: integrationMode(),
+        storage: storageInfo(),
+        databaseConnected,
       });
       return;
     }
@@ -230,13 +321,38 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/v1/auth/google-url") {
-      writeJSON(response, 200, await googleAuthURL(null, "login", url.searchParams.get("returnTo") ?? ""));
+      // OAuth URL creation is public and cheap per request but expensive in
+      // aggregate (each state is persisted). Apply the same per-IP auth budget
+      // used by password login before allocating a state entry.
+      enforceAuthRateLimit(clientIP(request), "");
+      const returnTo = url.searchParams.get("returnTo") ?? "";
+      if (returnTo.length > MAX_RETURN_TO_CHARS) throw httpError(400, "returnTo is too long");
+      writeJSON(response, 200, await googleAuthURL(null, "login", returnTo));
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/v1/auth/google-native") {
+      // This route is public and reaches Google's userinfo endpoint. Apply the
+      // same source-IP auth budget as password login before doing any upstream
+      // work, even when the supplied Google token is invalid.
+      enforceAuthRateLimit(clientIP(request), "");
       const input = /** @type {any} */ (await readJSON(request));
       writeJSON(response, 200, await googleNativeLogin(input));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/auth/google-exchange") {
+      // The callback sends only a short-lived, one-use code through the app
+      // deep link. Exchange it over the authenticated transport before issuing
+      // the bearer session token, and rate-limit guesses from one source.
+      enforceAuthRateLimit(clientIP(request), "");
+      const input = /** @type {{ code?: unknown }} */ (await readJSON(request));
+      const code = typeof input.code === "string" ? input.code : "";
+      const userID = await consumeOAuthHandoffDurable(code);
+      if (!userID) throw httpError(400, "oauth handoff is invalid or expired");
+      if (!state.users[userID]) throw httpError(400, "oauth account no longer exists");
+      const token = await createSession(userID);
+      writeJSON(response, 200, { token, session: sessionPayload(userID) });
       return;
     }
 
@@ -244,26 +360,54 @@ const server = http.createServer(async (request, response) => {
       const code = url.searchParams.get("code");
       const oauthState = url.searchParams.get("state");
       if (!code) throw httpError(400, "missing google authorization code");
-      const stateEntry = consumeGoogleOAuthState(oauthState);
+      if (
+        code.length > MAX_OAUTH_CALLBACK_PARAM_CHARS ||
+        (oauthState && oauthState.length > MAX_OAUTH_CALLBACK_PARAM_CHARS)
+      ) {
+        throw httpError(400, "google oauth parameters are too long");
+      }
+      const stateEntry = await consumeGoogleOAuthStateDurable(oauthState);
       if (!stateEntry) throw httpError(400, "google oauth state is invalid or expired");
 
-      const tokenPayload = await exchangeGoogleCode(code);
-      tokenPayload.client_id = config.google?.clientId;
+      const tokenPayload = {
+        ...(await exchangeGoogleCode(code)),
+        client_id: config.google?.clientId,
+      };
       if (stateEntry.mode === "login") {
         const profile = await fetchGoogleProfile(tokenPayload.access_token);
         const userID = await ensureGoogleAuthUser(profile.email, tokenPayload, profile);
         invalidateBriefingCache(userID);
-        const token = await createSession(userID);
+        // Persist the account before creating a handoff. In Postgres the two
+        // operations use separate tables; a crash can leave an account without
+        // a handoff, but never a handoff for an account that was not saved.
         await saveState();
-        writeAuthRedirect(response, token, stateEntry.returnTo);
+        if (stateEntry.returnTo) {
+          const handoffCode = createOAuthHandoff(userID);
+          await saveOAuthState(handoffCode, state.oauthStates[handoffCode]);
+          writeAuthRedirect(response, handoffCode, stateEntry.returnTo);
+        } else {
+          // There is no safe destination to deliver a handoff to. Do not mint
+          // an orphaned session or place a bearer credential in an HTML page.
+          writeHTML(response, 200, "Google login complete. Return to EVE.");
+        }
         return;
       }
 
       const userID = stateEntry.userID;
+      if (!userID) throw httpError(400, "google connection state has no user");
       ensureUser(userID);
+      const previousTokens = state.users[userID].googleTokens || {};
       state.users[userID].googleConnected = true;
       state.users[userID].connectionMode = "google";
-      state.users[userID].googleTokens = tokenPayload;
+      // Google often omits refresh_token when an existing grant is reused.
+      // Preserve the prior one so a reconnect does not silently make the
+      // mailbox expire after the new access token does.
+      state.users[userID].googleTokens = {
+        ...previousTokens,
+        ...tokenPayload,
+        refresh_token: tokenPayload.refresh_token || previousTokens.refresh_token,
+        needsReconnect: false,
+      };
       invalidateBriefingCache(userID);
       await saveState();
       writeHTML(response, 200, "Google connected. You can return to EVE.");
@@ -272,6 +416,20 @@ const server = http.createServer(async (request, response) => {
 
     // Authenticated routes start here.
     const userID = await requireUserID(request);
+
+    // AI, Gmail, and transcription calls are externally billable and can be
+    // retried by a client. Keep a separate per-user bucket for each capability
+    // before any upstream work starts.
+    const routeBucket =
+      request.method === "POST" && url.pathname === "/v1/voice/transcribe"
+        ? "voice"
+        : request.method === "POST" && url.pathname === "/v1/assistant/ask"
+          ? "assistant"
+          : request.method === "POST" &&
+              (url.pathname === "/v1/briefings/generate" || url.pathname === "/v1/gmail/poll")
+            ? "gmail"
+            : "";
+    if (routeBucket) enforceUserRateLimit(userID, routeBucket);
 
     if (request.method === "GET" && url.pathname === "/v1/session") {
       writeJSON(response, 200, sessionPayload(userID));
@@ -339,9 +497,8 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/v1/briefings/today") {
       ensureUser(userID);
       const rangeParam = url.searchParams.get("range");
-      const range =
-        rangeParam === "week" || rangeParam === "month" ? rangeParam : "day";
-      const todayKey = dayKey(new Date());
+      const range = rangeParam === "week" || rangeParam === "month" ? rangeParam : "day";
+      const todayKey = dayKeyInZone(new Date(), state.users[userID]?.preferences?.timezone || "UTC");
       const cacheKey = range === "day" ? todayKey : `${todayKey}:${range}`;
       if (!state.briefings[userID]?.[cacheKey]) {
         await generateBriefing(userID, new Date(), { range });
@@ -363,7 +520,7 @@ const server = http.createServer(async (request, response) => {
     const emailBodyMatch = url.pathname.match(/^\/v1\/emails\/([^/]+)\/body$/);
     if (request.method === "GET" && emailBodyMatch && emailBodyMatch[1]) {
       ensureUser(userID);
-      const email = await getEmailBody(userID, decodeURIComponent(emailBodyMatch[1]));
+      const email = await getEmailBody(userID, decodePathComponent(emailBodyMatch[1]));
       writeJSON(response, 200, email);
       return;
     }
@@ -437,8 +594,7 @@ const server = http.createServer(async (request, response) => {
       ensureUser(userID);
       const status = url.searchParams.get("status") || undefined;
       const since = url.searchParams.get("since") || undefined;
-      const limitParam = url.searchParams.get("limit");
-      const limit = limitParam ? Math.max(1, Math.min(200, Number(limitParam) || 50)) : 50;
+      const limit = positiveIntegerQuery(url, "limit", 50, 200);
       const thoughts = listThoughts(userID, {
         status: /** @type {any} */ (status),
         since,
@@ -452,7 +608,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && markMatch && markMatch[1]) {
       ensureUser(userID);
       const input = /** @type {Record<string, unknown>} */ (await readJSON(request));
-      const thought = markThought(userID, decodeURIComponent(markMatch[1]), {
+      const thought = markThought(userID, decodePathComponent(markMatch[1]), {
         status: /** @type {any} */ (input.status),
         feedback: /** @type {any} */ (input.feedback),
       });
@@ -464,9 +620,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "POST" && url.pathname === "/v1/proactive/available-now") {
       ensureUser(userID);
       const input = /** @type {Record<string, any>} */ (await readJSON(request));
-      const categories = Array.isArray(input.categories)
-        ? input.categories.filter(isCategory)
-        : undefined;
+      const categories = Array.isArray(input.categories) ? input.categories.filter(isCategory) : undefined;
       const window = setAvailableNow(userID, {
         minutes: typeof input.minutes === "number" ? input.minutes : undefined,
         categories,
@@ -492,6 +646,7 @@ const server = http.createServer(async (request, response) => {
     if (
       request.method === "POST" &&
       url.pathname === "/v1/proactive/dispatch" &&
+      !config.isProduction &&
       process.env.EVE_ALLOW_TEST_DISPATCH === "1"
     ) {
       ensureUser(userID);
@@ -509,14 +664,29 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && url.pathname === "/v1/device-notifications") {
+      ensureUser(userID);
       const input = /** @type {Record<string, any>} */ (await readJSON(request));
-      writeJSON(response, 201, await recordDeviceNotification(userID, input));
+      const idempotencyKey = request.headers["idempotency-key"];
+      writeJSON(
+        response,
+        201,
+        await recordDeviceNotification(userID, input, {
+          idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : undefined,
+        }),
+      );
       return;
     }
 
     if (request.method === "GET" && url.pathname === "/v1/device-notifications") {
-      const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") || 30)));
+      ensureUser(userID);
+      const limit = positiveIntegerQuery(url, "limit", 30, 100);
       writeJSON(response, 200, { entries: await getDeviceNotifications(userID, limit) });
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/v1/device-notifications") {
+      ensureUser(userID);
+      writeJSON(response, 200, await clearDeviceNotifications(userID));
       return;
     }
 
@@ -541,8 +711,12 @@ const server = http.createServer(async (request, response) => {
     const draftActionMatch = url.pathname.match(/^\/v1\/drafts\/([^/]+)\/action$/);
     if (request.method === "POST" && draftActionMatch && draftActionMatch[1]) {
       ensureUser(userID);
-      const input = /** @type {{ action?: string, draftReply?: string }} */ (await readJSON(request));
-      const result = await actOnDraft(userID, decodeURIComponent(draftActionMatch[1]), input);
+      const input = /** @type {{ action?: string, draftReply?: string, idempotencyKey?: string }} */ (
+        await readJSON(request)
+      );
+      const idempotencyKey = request.headers["idempotency-key"];
+      if (typeof idempotencyKey === "string" && !input.idempotencyKey) input.idempotencyKey = idempotencyKey;
+      const result = await actOnDraft(userID, decodePathComponent(draftActionMatch[1]), input);
       await saveState();
       writeJSON(response, 200, result);
       return;
@@ -552,6 +726,15 @@ const server = http.createServer(async (request, response) => {
       ensureUser(userID);
       const input = /** @type {{ token?: unknown, platform?: unknown }} */ (await readJSON(request));
       const result = registerPushToken(userID, input);
+      await saveState();
+      writeJSON(response, 200, result);
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/v1/notifications/push-token") {
+      ensureUser(userID);
+      const token = url.searchParams.get("token") || "";
+      const result = unregisterPushToken(userID, token);
       await saveState();
       writeJSON(response, 200, result);
       return;
@@ -576,26 +759,11 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-// Mount the /v1/voice/live WebSocket bridge. Auth: try the standard
-// Bearer header first, then fall back to ?token=... query param since
-// some WS clients don't send Authorization on upgrade.
+// Mount the /v1/voice/live WebSocket bridge. Authentication stays in the
+// upgrade headers so bearer credentials never become URL/query-string data.
 attachVoiceWS(server, async (req) => {
   try {
-    const userID = await requireUserID(req);
-    if (userID) return userID;
-  } catch {
-    // fall through to query-string token
-  }
-  try {
-    const url = new URL(req.url || "/", `http://${req.headers.host}`);
-    const queryToken = url.searchParams.get("token");
-    if (!queryToken) return null;
-    // Synthesize a request with the token in the Authorization header so
-    // we can reuse the existing requireUserID code path.
-    const synthetic = /** @type {any} */ ({
-      headers: { authorization: `Bearer ${queryToken}` },
-    });
-    return await requireUserID(synthetic);
+    return await requireUserID(req);
   } catch {
     return null;
   }

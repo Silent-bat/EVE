@@ -107,9 +107,7 @@ async function main() {
 
       // One extra rAF tick so the frozen draw has certainly landed in the
       // preserved drawing buffer before the screenshot reads it back.
-      await page.evaluate(
-        () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
-      );
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
       const file = resolve(OUT, `${shot.id}.png`);
       await page.locator("canvas").screenshot({ path: file });

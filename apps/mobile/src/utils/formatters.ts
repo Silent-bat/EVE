@@ -86,7 +86,9 @@ export function longDateTime(value: string): string {
   });
 }
 
-/** Seconds as `m:ss`. For voice-message lengths. */export function formatDuration(totalSeconds: number): string {
+/** Seconds as `m:ss`. For voice-message lengths. */ export function formatDuration(
+  totalSeconds: number,
+): string {
   const safe = Math.max(0, Math.floor(totalSeconds));
   const minutes = Math.floor(safe / 60);
   const seconds = safe % 60;
@@ -104,12 +106,22 @@ export function formatTimeRange(startsAt: string, endsAt: string): string {
   return end ? `${start} – ${end}` : start;
 }
 
-export function tokenFromURL(value: string): string {
+/**
+ * Read the one-use OAuth handoff code from a callback URL. The server places it
+ * in the fragment so browsers, proxies, and access logs never receive it.
+ */
+export function oauthCodeFromURL(value: string): string {
   try {
     const url = new URL(value);
-    return url.searchParams.get("eve_token") || "";
+    const fragment = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+    return new URLSearchParams(fragment).get("eve_code") || url.searchParams.get("eve_code") || "";
   } catch {
-    const match = value.match(/[?&]eve_token=([^&]+)/);
-    return match?.[1] ? decodeURIComponent(match[1]) : "";
+    const match = value.match(/(?:[#?&])eve_code=([^&#]+)/);
+    if (!match?.[1]) return "";
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      return "";
+    }
   }
 }

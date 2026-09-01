@@ -87,15 +87,9 @@ test("scrubs preheader padding out of a text/plain part", () => {
   // Real shape from a job-alert sender: the plain-text alternative is padded
   // with runs of &zwnj; and U+034F so the inbox preview line looks longer.
   const padded =
-    "Your job alert has new matches!" +
-    " &zwnj;".repeat(6) +
-    "\u034f".repeat(8) +
-    " Fabletics is hiring.";
+    "Your job alert has new matches!" + " &zwnj;".repeat(6) + "\u034f".repeat(8) + " Fabletics is hiring.";
   const payload = { mimeType: "multipart/alternative", parts: [part("text/plain", padded)] };
-  assert.equal(
-    decodeGmailBody(payload),
-    "Your job alert has new matches! Fabletics is hiring.",
-  );
+  assert.equal(decodeGmailBody(payload), "Your job alert has new matches! Fabletics is hiring.");
 });
 
 test("scrubText leaves plain-text angle brackets alone", () => {
@@ -111,8 +105,7 @@ test("scrubText decodes entities that appear in plain-text parts", () => {
 });
 
 test("stripHTML drops script and style content", () => {
-  const html =
-    "<script>var a = 1 < 2;</script><style>p{margin:0}</style><p>Only this</p>";
+  const html = "<script>var a = 1 < 2;</script><style>p{margin:0}</style><p>Only this</p>";
   assert.equal(stripHTML(html), "Only this");
 });
 

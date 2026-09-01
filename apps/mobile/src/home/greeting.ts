@@ -49,9 +49,7 @@ export function contextLine(ctx: DayContext): string {
   }
 
   if (ctx.meetingsToday > 0) {
-    facts.push(
-      ctx.meetingsToday === 1 ? "one meeting today" : `${ctx.meetingsToday} meetings today`,
-    );
+    facts.push(ctx.meetingsToday === 1 ? "one meeting today" : `${ctx.meetingsToday} meetings today`);
   }
 
   if (facts.length < 2 && ctx.suggestionCount > 0) {

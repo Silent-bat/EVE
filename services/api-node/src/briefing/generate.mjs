@@ -5,8 +5,8 @@
  * email on every call.
  */
 import { moduleLogger } from "../logger.mjs";
-import { save, state } from "../storage/index.mjs";
-import { addMinutes, atTime, dayKey, timeKey } from "../utils/dates.mjs";
+import { BACKGROUND_SWEEP_LOCK, save, state, tryWithAdvisoryLock } from "../storage/index.mjs";
+import { addMinutes, atTimeInZone, dayKeyInZone, timeKeyInZone } from "../utils/dates.mjs";
 import { fetchCalendarEvents, fetchGmailMessagesByIds, listGmailMessageIds } from "../google/api.mjs";
 import { analyzeMessages } from "./analysis.mjs";
 import { localMessageAnalysis, urgencyScore } from "./scoring.mjs";
@@ -21,6 +21,8 @@ import {
 } from "./priorityInbox.mjs";
 
 const log = moduleLogger("briefing");
+const MAX_BRIEFING_ENTRIES = 120;
+const BRIEFING_RETENTION_DAYS = 45;
 
 /**
  * Generate (or refresh) the user's briefing.
@@ -44,8 +46,9 @@ const log = moduleLogger("briefing");
  */
 export async function generateBriefing(userID, now, opts = {}) {
   const range = opts.range === "week" || opts.range === "month" ? opts.range : "day";
-  const generatedAt = atTime(now, 7, 45);
   const user = state.users[userID];
+  const timezone = user?.preferences?.timezone || "UTC";
+  const generatedAt = atTimeInZone(now, 7, 45, timezone);
 
   // --- Gmail: diff-first poll -------------------------------------------
   if (user?.connectionMode === "google" && user.googleTokens?.access_token) {
@@ -72,7 +75,7 @@ export async function generateBriefing(userID, now, opts = {}) {
 
   /** @type {Record<string, any>} */
   const briefing = {
-    id: `briefing-${dayKey(now)}-${range}`,
+    id: `briefing-${dayKeyInZone(now, timezone)}-${range}`,
     userId: userID,
     range,
     generatedAt: generatedAt.toISOString(),
@@ -88,9 +91,9 @@ export async function generateBriefing(userID, now, opts = {}) {
     calendar: calendar.map((event) => ({
       id: event.id,
       title: event.title,
-      startsAt: atTime(now, event.startHour, event.startMinute).toISOString(),
+      startsAt: atTimeInZone(now, event.startHour, event.startMinute, timezone).toISOString(),
       endsAt: addMinutes(
-        atTime(now, event.startHour, event.startMinute),
+        atTimeInZone(now, event.startHour, event.startMinute, timezone),
         event.durationMinutes,
       ).toISOString(),
       location: event.location,
@@ -98,9 +101,38 @@ export async function generateBriefing(userID, now, opts = {}) {
   };
 
   state.briefings[userID] ||= {};
-  const cacheKey = range === "day" ? dayKey(now) : `${dayKey(now)}:${range}`;
+  const cacheDay = dayKeyInZone(now, timezone);
+  const cacheKey = range === "day" ? cacheDay : `${cacheDay}:${range}`;
   state.briefings[userID][cacheKey] = briefing;
+  pruneBriefingHistory(userID, now);
   return briefing;
+}
+
+/**
+ * Keep the durable cache bounded even when the user never opens the app. A
+ * briefing is a rendered snapshot, not the source of truth (priorityInbox and
+ * the calendar provider are), so old snapshots can be discarded safely.
+ *
+ * @param {string} userID
+ * @param {Date} now
+ */
+function pruneBriefingHistory(userID, now) {
+  const history = state.briefings[userID];
+  if (!history || typeof history !== "object" || Array.isArray(history)) return;
+  const cutoff = now.getTime() - BRIEFING_RETENTION_DAYS * 86_400_000;
+  const entries = Object.entries(history)
+    .filter(([, briefing]) => {
+      const generatedAt = Date.parse(String(briefing?.generatedAt || ""));
+      if (Number.isFinite(generatedAt)) return generatedAt >= cutoff;
+      const keyDate = Date.parse(String(briefing?.id || "").match(/briefing-(\d{4}-\d{2}-\d{2})/)?.[1] || "");
+      return !Number.isFinite(keyDate) || keyDate >= cutoff;
+    })
+    .sort(([, left], [, right]) => {
+      const a = Date.parse(String(left?.generatedAt || ""));
+      const b = Date.parse(String(right?.generatedAt || ""));
+      return (Number.isFinite(b) ? b : 0) - (Number.isFinite(a) ? a : 0);
+    });
+  state.briefings[userID] = Object.fromEntries(entries.slice(0, MAX_BRIEFING_ENTRIES));
 }
 
 /**
@@ -115,13 +147,17 @@ export async function generateBriefing(userID, now, opts = {}) {
 async function refreshPriorityInbox(user, userID, range) {
   const knownIds = getKnownMessageIds(userID);
   const allMessages = await listGmailMessageIds(user, { range });
-  const newIds = allMessages
-    .filter((m) => !knownIds.has(m.id))
-    .map((m) => m.id);
+  const newIds = allMessages.filter((m) => !knownIds.has(m.id)).map((m) => m.id);
 
-  rememberMessageIds(userID, allMessages.map((m) => m.id));
-
-  if (newIds.length === 0) return;
+  if (newIds.length === 0) {
+    // There is nothing to fetch, so the listing itself confirms these IDs are
+    // still valid and can refresh the bounded retention window.
+    rememberMessageIds(
+      userID,
+      allMessages.map((m) => m.id),
+    );
+    return;
+  }
 
   const messages = await fetchGmailMessagesByIds(user, newIds);
   if (messages.length === 0) return;
@@ -151,11 +187,20 @@ async function refreshPriorityInbox(user, userID, range) {
       urgencyReason: analysis.urgencyReason,
       summary: analysis.summary,
       draftReply: analysis.draftReply,
-      category: typeof /** @type {any} */ (analysis).category === "string" ? /** @type {any} */ (analysis).category : "other",
+      category:
+        typeof (/** @type {any} */ (analysis).category) === "string"
+          ? /** @type {any} */ (analysis).category
+          : "other",
     };
   });
 
   upsertPriorityInbox(userID, freshEmails);
+  // Only acknowledge IDs whose full message was actually fetched. A transient
+  // Gmail outage must leave failed IDs eligible for the next poll.
+  rememberMessageIds(
+    userID,
+    messages.map((message) => message.id),
+  );
 }
 
 /**
@@ -163,20 +208,24 @@ async function refreshPriorityInbox(user, userID, range) {
  * wall-clock minute. Idempotent for the same minute.
  */
 export async function runDueBriefings() {
-  const now = new Date();
-  let changed = false;
-  for (const userID of Object.keys(state.users)) {
-    const prefs = state.users[userID].preferences;
-    if (!prefs?.briefingTime) continue;
-    if (prefs.briefingTime !== timeKey(now)) continue;
+  const locked = await tryWithAdvisoryLock(BACKGROUND_SWEEP_LOCK, async () => {
+    const now = new Date();
+    let changed = false;
+    for (const userID of Object.keys(state.users)) {
+      const prefs = state.users[userID].preferences;
+      if (!prefs?.briefingTime) continue;
+      const timezone = prefs.timezone || "UTC";
+      if (prefs.briefingTime !== timeKeyInZone(now, timezone)) continue;
 
-    const today = dayKey(now);
-    const existing = state.briefings[userID]?.[today];
-    if (existing?.scheduledAt === today) continue;
+      const today = dayKeyInZone(now, timezone);
+      const existing = state.briefings[userID]?.[today];
+      if (existing?.scheduledAt === today) continue;
 
-    const briefing = await generateBriefing(userID, now);
-    briefing.scheduledAt = today;
-    changed = true;
-  }
-  if (changed) await save();
+      const briefing = await generateBriefing(userID, now);
+      briefing.scheduledAt = today;
+      changed = true;
+    }
+    if (changed) await save();
+  });
+  return locked.acquired;
 }

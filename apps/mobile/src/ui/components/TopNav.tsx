@@ -50,9 +50,7 @@ export function TopNav({
       </View>
 
       <View style={[styles.side, styles.sideEnd]}>
-        {action ? (
-          <RoundButton icon={action.icon} label={action.label} onPress={action.onPress} />
-        ) : null}
+        {action ? <RoundButton icon={action.icon} label={action.label} onPress={action.onPress} /> : null}
       </View>
     </View>
   );

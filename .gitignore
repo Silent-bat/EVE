@@ -3,6 +3,7 @@
 .env
 .env.*
 !.env.example
+!services/api-node/tests/.env.test.example
 .eve-data/
 *.log
 node_modules/

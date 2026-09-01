@@ -37,8 +37,8 @@ function seedGoogle(/** @type {string | null} */ lastPollAt) {
   state.deviceNotifications[GOOGLE] = [];
 }
 
-test("POLL_INTERVAL_MS defaults to 3 hours", () => {
-  // Allow override via env, but the default we ship is 3h.
+test("POLL_INTERVAL_MS has a bounded default", () => {
+  // Allow override via env, but never poll more often than once per minute.
   assert.ok(POLL_INTERVAL_MS >= 60_000, "interval must be at least 1 minute");
 });
 

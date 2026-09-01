@@ -2,7 +2,7 @@
  * Gmail polling loop.
  *
  * Every 60s we sweep users; for each Google-connected user whose
- * lastGmailPollAt is older than POLL_INTERVAL_MS (default 3h), we:
+ * lastGmailPollAt is older than POLL_INTERVAL_MS (default 15min), we:
  *
  *   1. Capture the priority inbox state + known-IDs count.
  *   2. Call generateBriefing(now) — this diff-first polls Gmail, fetches
@@ -18,8 +18,8 @@
  * Idempotent: if the poller runs again within POLL_INTERVAL_MS it no-ops.
  */
 import { moduleLogger } from "../logger.mjs";
-import { sendPushToUser } from "../notifications/push.mjs";
-import { save, state } from "../storage/index.mjs";
+import { dispatchProactive } from "../notifications/proactive.mjs";
+import { BACKGROUND_SWEEP_LOCK, save, state, tryWithAdvisoryLock } from "../storage/index.mjs";
 import { generateBriefing } from "./generate.mjs";
 import { appendSystemNotification } from "./tools.mjs";
 import { getKnownMessageIds, listPriorityInbox } from "./priorityInbox.mjs";
@@ -48,29 +48,32 @@ const NOTIFY_THRESHOLD = 75;
  * @param {{ force?: boolean }} [opts]
  */
 export async function sweepGmailPollers(opts = {}) {
-  const now = new Date();
-  let changed = false;
-  for (const userID of Object.keys(state.users)) {
-    const user = state.users[userID];
-    if (!user || user.connectionMode !== "google" || !user.googleTokens?.access_token) continue;
+  const locked = await tryWithAdvisoryLock(BACKGROUND_SWEEP_LOCK, async () => {
+    const now = new Date();
+    let changed = false;
+    for (const userID of Object.keys(state.users)) {
+      const user = state.users[userID];
+      if (!user || user.connectionMode !== "google" || !user.googleTokens?.access_token) continue;
 
-    const poll = (user.gmailPoll ||= {});
-    const last = poll.lastPollAt ? Date.parse(poll.lastPollAt) : 0;
-    const due = opts.force || !last || now.getTime() - last >= POLL_INTERVAL_MS;
-    if (!due) continue;
-    if (poll.inFlight) continue;
+      const poll = (user.gmailPoll ||= {});
+      const last = poll.lastPollAt ? Date.parse(poll.lastPollAt) : 0;
+      const due = opts.force || !last || now.getTime() - last >= POLL_INTERVAL_MS;
+      if (!due) continue;
+      if (poll.inFlight) continue;
 
-    poll.inFlight = true;
-    try {
-      await pollOne(userID, now);
-      changed = true;
-    } catch (error) {
-      log.warn({ err: error, userID }, "gmail poll failed");
-    } finally {
-      poll.inFlight = false;
+      poll.inFlight = true;
+      try {
+        await pollOne(userID, now);
+        changed = true;
+      } catch (error) {
+        log.warn({ err: error, userID }, "gmail poll failed");
+      } finally {
+        poll.inFlight = false;
+      }
     }
-  }
-  if (changed) await save();
+    if (changed) await save();
+  });
+  return locked.acquired;
 }
 
 /**
@@ -80,9 +83,7 @@ export async function sweepGmailPollers(opts = {}) {
 async function pollOne(userID, now) {
   // Snapshot priority inbox and known-IDs count so we can detect what
   // arrived during this poll cycle.
-  const beforePriorityIds = new Set(
-    listPriorityInbox(userID).map((/** @type {any} */ e) => e.id),
-  );
+  const beforePriorityIds = new Set(listPriorityInbox(userID).map((/** @type {any} */ e) => e.id));
   const beforeKnownCount = getKnownMessageIds(userID).size;
 
   const briefing = await generateBriefing(userID, now);
@@ -108,21 +109,31 @@ async function pollOne(userID, now) {
       body: `Top: "${top.subject}" from ${top.senderName || top.senderEmail}.`,
       data: { kind: "gmail.priority", count: newPriority.length },
     };
-    appendSystemNotification(userID, pushPayload);
+    await appendSystemNotification(userID, pushPayload);
   } else if (newEmailCount > 0) {
     pushPayload = {
       title: newEmailCount === 1 ? "1 new email" : `${newEmailCount} new emails`,
       body: "Gmail refreshed. Open EVE to review.",
       data: { kind: "gmail.new", count: newEmailCount },
     };
-    appendSystemNotification(userID, pushPayload);
+    await appendSystemNotification(userID, pushPayload);
   }
 
-  if (pushPayload && user.preferences?.pushEnabled !== false) {
+  if (pushPayload) {
     try {
-      await sendPushToUser(userID, pushPayload);
+      // Route background mail notifications through the same proactive gate as
+      // every other interruption. This enforces the user's category choice,
+      // quiet hours, and hourly/daily caps while still keeping the in-app
+      // system notification above as the source of truth.
+      await dispatchProactive(userID, {
+        category: newPriority.length > 0 ? "urgent_email" : "briefing_ready",
+        urgency: newPriority.length > 0 ? urgencyForScore(newPriority[0].urgencyScore) : "low",
+        title: pushPayload.title,
+        body: pushPayload.body,
+        data: pushPayload.data,
+      });
     } catch (error) {
-      log.warn({ err: error, userID }, "push send failed");
+      log.warn({ err: error, userID }, "proactive mail notification failed");
     }
   }
 
@@ -135,6 +146,15 @@ async function pollOne(userID, now) {
     },
     "gmail poll done",
   );
+}
+
+/** @param {unknown} score */
+function urgencyForScore(score) {
+  const value = Number(score);
+  if (value >= 90) return "critical";
+  if (value >= 75) return "high";
+  if (value >= 60) return "medium";
+  return "low";
 }
 
 /**

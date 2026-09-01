@@ -21,13 +21,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { fetchEmailBody } from "./api";
 import { Card, Chip } from "../ui/primitives";
-import {
-  ErrorState,
-  LoadingState,
-  TopNav,
-  emailUrgencyLabel,
-  emailUrgencyTone,
-} from "../ui/components";
+import { ErrorState, LoadingState, TopNav, emailUrgencyLabel, emailUrgencyTone } from "../ui/components";
 import { PressableScale } from "../ui/motion";
 import { HIT_SLOP, MIN_TOUCH, radius, spacing, type Tone } from "../ui/theme";
 import { useTheme, useThemedStyles, type ThemeValue } from "../ui/ThemeContext";
@@ -158,9 +152,7 @@ export function MailScreen({
             <Card style={styles.draft}>
               <View style={styles.readHeader}>
                 <Ionicons name="create-outline" size={13} color={palette.ambient} />
-                <Text style={styles.readLabel}>
-                  {pending ? "Draft reply — not sent" : "Draft reply"}
-                </Text>
+                <Text style={styles.readLabel}>{pending ? "Draft reply — not sent" : "Draft reply"}</Text>
               </View>
               <Text style={styles.draftBody}>{shown.draftReply}</Text>
 
@@ -287,11 +279,7 @@ function DecisionButton({
       accessibilityLabel={label}
       accessibilityHint={hint}
       accessibilityState={{ disabled: Boolean(disabled) }}
-      style={[
-        styles.action,
-        { backgroundColor: toneSurface(tone) },
-        disabled ? styles.disabled : null,
-      ]}
+      style={[styles.action, { backgroundColor: toneSurface(tone) }, disabled ? styles.disabled : null]}
     >
       <Ionicons name={icon} size={16} color={ink} />
       <Text style={[styles.actionText, { color: ink }]}>{label}</Text>

@@ -18,7 +18,12 @@ body {
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  font:
+    14px/1.5 ui-sans-serif,
+    -apple-system,
+    "Segoe UI",
+    system-ui,
+    sans-serif;
 }
 
 a {

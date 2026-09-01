@@ -89,8 +89,15 @@ export async function readJSON(request) {
   if (overLimit) throw httpError(413, "request body too large");
   if (chunks.length === 0) return {};
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
+    const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw httpError(400, "JSON body must be an object");
+    }
+    return parsed;
+  } catch (error) {
+    // Preserve an explicit HttpError from the shape check rather than
+    // re-labelling it as malformed JSON.
+    if (/** @type {any} */ (error)?.status) throw error;
     throw httpError(400, "invalid JSON body");
   }
 }
@@ -116,39 +123,75 @@ export function writeHTML(response, status, message) {
 }
 
 /**
- * Hand the session token back to the app after Google sign-in.
+ * Hand a one-use OAuth handoff code back to the app after Google sign-in.
  *
- * This used to render an HTML page that carried the token and bounced via an
- * inline `window.location.replace(...)`. Two things were wrong with that. The
- * redirect URL was interpolated with `JSON.stringify`, which escapes for
- * JavaScript and not for HTML, so a `returnTo` containing `</script>` closed the
- * script element and the rest was parsed as markup — and `safeReturnTo` lets any
- * `eve://` value through, so that was reachable. And the app's own CSP sets
- * `script-src 'self'` with no inline allowance, so the redirect the page existed
- * to perform never ran anyway; users fell through to the manual link.
+ * This used to render an HTML page that carried a bearer token and bounced via
+ * an inline `window.location.replace(...)`. The destination was interpolated
+ * into a script context, and the app's strict CSP blocked that inline script in
+ * the first place. A fragment-only handoff plus a 302 avoids both hazards.
  *
  * A 302 fixes both. There is no document, so there is nothing to inject into,
  * and the browser performs the redirect without needing script at all.
  *
  * @param {ServerResponse} response
- * @param {string} token
+ * @param {string} code
  * @param {string} returnTo
  */
-export function writeAuthRedirect(response, token, returnTo) {
+export function writeAuthRedirect(response, code, returnTo) {
   if (!returnTo) {
     writeHTML(response, 200, "Google login complete. Return to EVE.");
     return;
   }
-  const separator = returnTo.includes("?") ? "&" : "?";
-  const redirectURL = `${returnTo}${separator}eve_token=${encodeURIComponent(token)}`;
+  let redirectURL;
+  try {
+    // A URL fragment is delivered to the native app/browser but is never sent
+    // in HTTP requests, proxy logs, or Referer headers. The value is a
+    // short-lived handoff code, not a bearer session token; the app exchanges
+    // it over HTTPS exactly once.
+    const parsed = new URL(returnTo);
+    if (!isAllowedAuthRedirect(parsed)) throw new Error("redirect destination is not allowlisted");
+    parsed.hash = new URLSearchParams({ eve_code: code }).toString();
+    redirectURL = parsed.toString();
+  } catch {
+    // `returnTo` normally comes from safeReturnTo(). Keep this helper fail
+    // closed if a caller accidentally passes an invalid destination.
+    writeHTML(response, 200, "Google login complete. Return to EVE.");
+    return;
+  }
   response.writeHead(302, {
     Location: redirectURL,
-    // The token is in the URL. Keep it out of shared caches and out of the
-    // Referer header on whatever the app navigates to next.
+    // Keep the one-use code out of shared caches and any subsequent referrer.
     "Cache-Control": "no-store",
     "Referrer-Policy": "no-referrer",
   });
   response.end();
+}
+
+/**
+ * Keep this response-level guard in addition to `safeReturnTo` at the OAuth
+ * state boundary. It protects the helper if another callback ever passes an
+ * unsanitized destination directly.
+ *
+ * @param {URL} parsed
+ */
+function isAllowedAuthRedirect(parsed) {
+  if (
+    parsed.protocol === "eve:" &&
+    parsed.hostname === "auth" &&
+    parsed.pathname === "/google" &&
+    !parsed.username &&
+    !parsed.password
+  ) {
+    return true;
+  }
+  return (
+    parsed.protocol === "http:" &&
+    !config.isProduction &&
+    (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") &&
+    Boolean(parsed.port) &&
+    !parsed.username &&
+    !parsed.password
+  );
 }
 
 /**

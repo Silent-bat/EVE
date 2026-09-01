@@ -9,10 +9,12 @@
 import { actOnDraft } from "./drafts.mjs";
 import { generateBriefing } from "./generate.mjs";
 import { save, state } from "../storage/index.mjs";
-import { dayKey } from "../utils/dates.mjs";
+import { dayKeyInZone } from "../utils/dates.mjs";
 import { httpError } from "../http/responses.mjs";
 import { normalizePreferences } from "../storage/state.mjs";
 import { fetchGmailMessages, searchGmailMessages } from "../google/api.mjs";
+import { persistDeviceNotification } from "../notifications/index.mjs";
+import { getProactivePrefs, normalizeProactivePrefs } from "../notifications/proactive.mjs";
 
 /**
  * Tool catalog handed to the model. Keep arg shapes simple so the LLM can
@@ -76,7 +78,7 @@ export const TOOL_CATALOG = [
       "Save a durable fact about the user that should persist across conversations (their role, recurring contacts, projects, preferences, schedule, anything they ask you to remember). Use one short factual sentence.",
     args: {
       fact: "string — one concise sentence",
-      kind: "optional string — category tag like 'profile', 'contact', 'project', 'preference'",
+      kind: "optional string — one of 'profile', 'contact', 'project', 'preference', 'general'",
     },
   },
   {
@@ -85,6 +87,21 @@ export const TOOL_CATALOG = [
     args: { id: "string — the memory id" },
   },
 ];
+
+/** Categories accepted in durable memory records. */
+export const MEMORY_KINDS = Object.freeze(["profile", "contact", "project", "preference", "general"]);
+
+/**
+ * Keep memory categories bounded and predictable before they are persisted or
+ * inserted into a model context. Unknown values are intentionally generic.
+ *
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function normalizeMemoryKind(value) {
+  const kind = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return MEMORY_KINDS.includes(kind) ? kind : "general";
+}
 
 /**
  * Plain-English summary of the catalog used in the planner prompt.
@@ -99,16 +116,83 @@ export function toolCatalogPrompt() {
 }
 
 /**
+ * Destructive or durable tools must be corroborated by the authenticated
+ * user's current utterance. Model output alone is not authorization: an email
+ * or notification can contain text that persuades a model to call a tool.
+ *
+ * @param {string} action
+ * @param {unknown} userPrompt
+ */
+export function hasExplicitActionIntent(action, userPrompt) {
+  const prompt = typeof userPrompt === "string" ? userPrompt.trim() : "";
+  if (!prompt) return false;
+  const lower = prompt.toLowerCase();
+  // Look for a negation before the command, not only in the exact phrase
+  // "don't approve". This also covers "I don't want you to send it" and
+  // "there is no need to remember this".
+  const negated =
+    /\b(?:don't|do not|never|no longer|shouldn't|should not|cannot|can't|without)\b[^.!?]{0,80}\b(?:approve|send|deliver|reply|respond|reject|discard|remember|save|forget|change|update|set|enable|disable)\b/.test(
+      lower,
+    ) ||
+    /\bno\s+need\s+to\b[^.!?]{0,40}\b(?:approve|send|deliver|reply|respond|reject|discard|remember|save|forget|change|update|set|enable|disable)\b/.test(
+      lower,
+    );
+  if (negated) return false;
+  switch (action) {
+    case "approve_draft":
+      return (
+        /^(?:(?:please|kindly)\s+)?(?:approve|send|deliver|reply|respond)\b/.test(lower) ||
+        /^(?:yes\s*,?\s*)?(?:approve|send|deliver|reply|respond)\b/.test(lower) ||
+        /^(?:go ahead(?: and)?|you can|i approve|i want you to|i(?:'d| would) like you to|can you|could you|would you)\s+(?:approve|send|deliver|reply|respond)\b/.test(
+          lower,
+        )
+      );
+    case "reject_draft":
+      return (
+        /^(?:(?:please|kindly)\s+)?(?:reject|discard|decline)\b/.test(lower) ||
+        /^(?:yes\s*,?\s*)?(?:reject|discard|decline)\b/.test(lower) ||
+        /^(?:go ahead(?: and)?|you can|i (?:reject|decline)|i want you to|i(?:'d| would) like you to|can you|could you|would you)\s+(?:reject|discard|decline)\b/.test(
+          lower,
+        )
+      );
+    case "remember":
+      return (
+        /^(?:(?:please|kindly)\s+)?(?:remember|save|keep)\b/.test(lower) ||
+        /^(?:i want you to|i(?:'d| would) like you to|can you|could you|would you)\s+(?:remember|save|keep)\b/.test(
+          lower,
+        )
+      );
+    case "forget":
+      return (
+        /^(?:(?:please|kindly)\s+)?(?:forget|remove|delete)\b/.test(lower) ||
+        /^(?:i want you to|i(?:'d| would) like you to|can you|could you|would you)\s+(?:forget|remove|delete)\b/.test(
+          lower,
+        )
+      );
+    case "update_preferences":
+      return (
+        /^(?:(?:please|kindly)\s+)?(?:change|update|set|adjust|enable|disable|turn)\b/.test(lower) &&
+        /\b(?:preferences?|settings?|timezone|briefing|notifications?|push|reminders?|quiet|schedule|proactive)\b/.test(
+          lower,
+        )
+      );
+    default:
+      return true;
+  }
+}
+
+/**
  * Execute a tool the model picked. Returns whatever the tool produced;
  * `null` for tools that mutate state without a useful response body.
  *
  * @param {string} userID
  * @param {{ name: string, args: Record<string, any> }} action
+ * @param {{ userPrompt?: string }} [options]
  * @returns {Promise<unknown>}
  */
-export async function runTool(userID, action) {
+export async function runTool(userID, action, options = {}) {
   const name = String(action.name || "answer");
-  const args = action.args || {};
+  const args = action.args && typeof action.args === "object" ? action.args : {};
 
   switch (name) {
     case "answer":
@@ -129,6 +213,9 @@ export async function runTool(userID, action) {
     case "reject_draft": {
       const draftId = String(args.draftId || "");
       if (!draftId) throw httpError(400, "draftId is required");
+      if (!hasExplicitActionIntent(name, options.userPrompt)) {
+        throw httpError(400, "explicit user confirmation is required for draft actions");
+      }
       const result = await actOnDraft(userID, draftId, {
         action: name === "approve_draft" ? "approve" : "reject",
         draftReply: typeof args.draftReply === "string" ? args.draftReply : undefined,
@@ -144,7 +231,19 @@ export async function runTool(userID, action) {
     case "update_preferences": {
       const user = state.users[userID];
       if (!user) throw httpError(404, "user not found");
-      user.preferences = normalizePreferences({ ...user.preferences, ...args });
+      if (!hasExplicitActionIntent(name, options.userPrompt)) {
+        throw httpError(400, "explicit user instruction is required to change preferences");
+      }
+      const merged = normalizePreferences({ ...user.preferences, ...args });
+      if (args.proactive !== undefined) {
+        /** @type {any} */ (merged).proactive = normalizeProactivePrefs(
+          args.proactive,
+          getProactivePrefs(userID),
+        );
+      } else if (user.preferences?.proactive !== undefined) {
+        /** @type {any} */ (merged).proactive = user.preferences.proactive;
+      }
+      user.preferences = merged;
       await save();
       return { preferences: user.preferences };
     }
@@ -156,6 +255,7 @@ export async function runTool(userID, action) {
       }
       const query = String(args.query || "").trim();
       if (!query) throw httpError(400, "query is required");
+      if (query.length > 500) throw httpError(400, "query is too long");
       const limit = typeof args.limit === "number" ? args.limit : undefined;
       const results = await searchGmailMessages(user, { query, limit });
       return { query, count: results.length, results };
@@ -176,14 +276,21 @@ export async function runTool(userID, action) {
     }
 
     case "remember": {
+      if (!hasExplicitActionIntent(name, options.userPrompt)) {
+        throw httpError(400, "explicit user instruction is required to save a memory");
+      }
       const fact = String(args.fact || "").trim();
-      if (!fact) throw httpError(400, "fact is required");
-      const entry = rememberFact(userID, fact, typeof args.kind === "string" ? args.kind : "");
+      if (!fact || fact.length > 500)
+        throw httpError(400, "fact is required and must be at most 500 characters");
+      const entry = rememberFact(userID, fact, args.kind);
       await save();
       return entry;
     }
 
     case "forget": {
+      if (!hasExplicitActionIntent(name, options.userPrompt)) {
+        throw httpError(400, "explicit user instruction is required to remove a memory");
+      }
       const id = String(args.id || "");
       if (!id) throw httpError(400, "memory id is required");
       const removed = forgetFact(userID, id);
@@ -211,11 +318,16 @@ export function rememberFact(userID, fact, kind) {
   user.memory ||= [];
   const lowered = fact.toLowerCase();
   const existing = user.memory.find((/** @type {any} */ m) => String(m.fact || "").toLowerCase() === lowered);
-  if (existing) return existing;
+  if (existing) {
+    // Migrate a legacy/custom category when a duplicate is encountered so an
+    // old value cannot leak into a later model context.
+    existing.kind = normalizeMemoryKind(existing.kind);
+    return existing;
+  }
   const entry = {
     id: `mem-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     fact,
-    kind: kind || "general",
+    kind: normalizeMemoryKind(kind),
     createdAt: new Date().toISOString(),
   };
   user.memory.unshift(entry);
@@ -254,7 +366,7 @@ export function listMemory(userID) {
  * @param {string} userID
  * @param {{ title: string, body: string, data?: Record<string, unknown> }} input
  */
-export function appendSystemNotification(userID, input) {
+export async function appendSystemNotification(userID, input) {
   state.deviceNotifications ||= {};
   state.deviceNotifications[userID] ||= [];
   const event = {
@@ -270,6 +382,7 @@ export function appendSystemNotification(userID, input) {
   };
   state.deviceNotifications[userID].unshift(event);
   state.deviceNotifications[userID] = state.deviceNotifications[userID].slice(0, 100);
+  await persistDeviceNotification(event);
   return event;
 }
 
@@ -277,6 +390,6 @@ export function appendSystemNotification(userID, input) {
  * Helper for the dayKey of "today" — handy in tools that need to look at the
  * current briefing.
  */
-export function todayKey() {
-  return dayKey(new Date());
+export function todayKey(userID = "") {
+  return dayKeyInZone(new Date(), state.users[userID]?.preferences?.timezone || "UTC");
 }

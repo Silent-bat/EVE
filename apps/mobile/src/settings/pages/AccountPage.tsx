@@ -18,13 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useState } from "react";
 import { Alert, StyleSheet, Text, TextInput, View } from "react-native";
 
-import {
-  changePassword,
-  deleteAccount,
-  disconnectGoogle,
-  revokeAllSessions,
-  setDisplayName,
-} from "../api";
+import { changePassword, deleteAccount, disconnectGoogle, revokeAllSessions, setDisplayName } from "../api";
 import { SettingsGroup, SettingsRowItem } from "../rows";
 import { SettingsPage } from "../PageShell";
 import type { Session } from "../../types";
@@ -175,12 +169,7 @@ export function AccountPage({
   return (
     <SettingsPage title="Account" onBack={onBack}>
       <View style={styles.identity}>
-        <UserAvatar
-          photoURL={session.photoURL}
-          name={session.displayName}
-          email={session.email}
-          size="lg"
-        />
+        <UserAvatar photoURL={session.photoURL} name={session.displayName} email={session.email} size="lg" />
         <View style={styles.identityText}>
           <Text style={styles.identityName} numberOfLines={1}>
             {session.displayName || session.email || "EVE account"}
@@ -212,9 +201,7 @@ export function AccountPage({
               accessibilityLabel="Display name"
               style={styles.input}
             />
-            <Text style={styles.editorHint}>
-              Leave it empty to show your email address instead.
-            </Text>
+            <Text style={styles.editorHint}>Leave it empty to show your email address instead.</Text>
             <View style={styles.actions}>
               <InlineButton
                 label="Cancel"
@@ -362,8 +349,8 @@ export function AccountPage({
             <View style={styles.warnRow}>
               <Ionicons name="alert-circle" size={18} color={palette.danger} />
               <Text style={styles.warnText}>
-                Type {CONFIRM_WORD} to confirm. Everything EVE holds about you is removed and
-                cannot be recovered.
+                Type {CONFIRM_WORD} to confirm. Everything EVE holds about you is removed and cannot be
+                recovered.
               </Text>
             </View>
             <TextInput

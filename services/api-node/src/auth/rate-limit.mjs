@@ -13,6 +13,7 @@ import { httpError } from "../http/responses.mjs";
 
 const ONE_MINUTE_MS = 60 * 1000;
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+const MAX_BUCKETS = 10_000;
 
 /**
  * @typedef {Object} Limiter
@@ -23,6 +24,8 @@ const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 const ipBuckets = new Map();
 /** @type {Map<string, Limiter>} */
 const emailBuckets = new Map();
+/** @type {Map<string, Limiter>} */
+const userBuckets = new Map();
 
 /**
  * @param {Map<string, Limiter>} store
@@ -36,8 +39,26 @@ function touch(store, key, windowMs, limit) {
   const bucket = store.get(key) ?? { timestamps: [] };
   // prune anything outside the window
   bucket.timestamps = bucket.timestamps.filter((t) => now - t < windowMs);
-  bucket.timestamps.push(now);
+  // Once a bucket is already over its limit, retaining every rejected attempt
+  // only creates an attacker-controlled memory sink. One extra marker is
+  // enough to keep the bucket blocked until its oldest legitimate timestamp
+  // expires.
+  if (bucket.timestamps.length <= limit) bucket.timestamps.push(now);
   store.set(key, bucket);
+  if (store.size > MAX_BUCKETS) {
+    for (const [candidateKey, candidate] of store) {
+      if (candidateKey === key) continue;
+      candidate.timestamps = candidate.timestamps.filter((t) => now - t < windowMs);
+      if (candidate.timestamps.length === 0) store.delete(candidateKey);
+      if (store.size <= MAX_BUCKETS) break;
+    }
+    // If every bucket is active, evict one oldest entry rather than allowing
+    // unbounded growth. A subsequent request recreates it with a fresh window.
+    if (store.size > MAX_BUCKETS) {
+      const oldestKey = store.keys().next().value;
+      if (oldestKey !== undefined) store.delete(oldestKey);
+    }
+  }
   if (bucket.timestamps.length <= limit) return { blocked: false, retryAfterSeconds: 0 };
   const oldest = bucket.timestamps[0] ?? now;
   return { blocked: true, retryAfterSeconds: Math.ceil((windowMs - (now - oldest)) / 1000) };
@@ -71,9 +92,26 @@ export function enforceAuthRateLimit(ip, email) {
 }
 
 /**
+ * Per-user route limiter for authenticated, billable work. The key includes a
+ * route bucket so a chat flood cannot consume the allowance reserved for a
+ * voice/transcription request.
+ *
+ * @param {string} userID
+ * @param {string} bucketName
+ * @param {number} [limit]
+ */
+export function enforceUserRateLimit(userID, bucketName, limit = config.rateLimit.userPerMin) {
+  if (!userID) return;
+  const result = touch(userBuckets, `${userID}:${bucketName}`, ONE_MINUTE_MS, limit);
+  if (result.blocked)
+    throw httpError(429, `too many ${bucketName} requests; retry in ${result.retryAfterSeconds}s`);
+}
+
+/**
  * Reset all counters. Test-only.
  */
 export function resetForTests() {
   ipBuckets.clear();
   emailBuckets.clear();
+  userBuckets.clear();
 }

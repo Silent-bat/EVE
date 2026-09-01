@@ -56,8 +56,12 @@ function baseArgs(overrides = {}) {
   return {
     prefs: overrides.prefs || defaultProactivePrefs(),
     thought: {
-      category: /** @type {import("../src/notifications/proactive.mjs").ProactiveCategory} */ (thoughtInput.category || "briefing_ready"),
-      urgency: /** @type {import("../src/notifications/proactive.mjs").Urgency} */ (thoughtInput.urgency || "low"),
+      category: /** @type {import("../src/notifications/proactive.mjs").ProactiveCategory} */ (
+        thoughtInput.category || "briefing_ready"
+      ),
+      urgency: /** @type {import("../src/notifications/proactive.mjs").Urgency} */ (
+        thoughtInput.urgency || "low"
+      ),
     },
     recentPushTimestamps: overrides.recentPushTimestamps || [],
     now: overrides.now || new Date("2026-06-15T12:00:00Z"),
@@ -90,10 +94,7 @@ test("defaults are conservative: only briefing_ready may push out of the box", (
 
 test("normalizeProactivePrefs rejects invalid quiet hours and falls back", () => {
   const base = defaultProactivePrefs();
-  const next = normalizeProactivePrefs(
-    { quietHoursStart: "not-a-time", quietHoursEnd: "99:99" },
-    base,
-  );
+  const next = normalizeProactivePrefs({ quietHoursStart: "not-a-time", quietHoursEnd: "99:99" }, base);
   assert.equal(next.quietHoursStart, base.quietHoursStart);
   assert.equal(next.quietHoursEnd, base.quietHoursEnd);
 });
@@ -108,7 +109,9 @@ test("normalizeProactivePrefs clamps frequency caps", () => {
 test("normalizeProactivePrefs merges a single category without touching others", () => {
   const base = defaultProactivePrefs();
   const next = normalizeProactivePrefs(
-    /** @type {any} */ ({ categories: { interview_prep: { enabled: true, threshold: "medium", deliveryMode: "push" } } }),
+    /** @type {any} */ ({
+      categories: { interview_prep: { enabled: true, threshold: "medium", deliveryMode: "push" } },
+    }),
     base,
   );
   assert.equal(next.categories.interview_prep.enabled, true);
@@ -142,6 +145,16 @@ test("normalizeProactivePrefs drops expired availableNow windows", () => {
   assert.equal(next.availableNow, null);
 });
 
+test("normalizeProactivePrefs recovers when the persisted base categories are malformed", () => {
+  const next = normalizeProactivePrefs(
+    /** @type {any} */ ({ categories: { briefing_ready: { enabled: false } } }),
+    /** @type {any} */ ({ categories: null, availableNow: null }),
+  );
+  assert.equal(next.categories.briefing_ready.enabled, false);
+  assert.equal(next.categories.urgent_email.enabled, false);
+  assert.equal(next.maxPushesPerDay, 3);
+});
+
 // ---------- shouldPush decision matrix ----------
 
 test("shouldPush refuses when user has no push tokens", () => {
@@ -160,9 +173,7 @@ test("shouldPush refuses when proactive master switch is off", () => {
 test("shouldPush refuses when the category is opted out", () => {
   const prefs = defaultProactivePrefs();
   // interview_prep is disabled by default
-  const result = shouldPush(
-    baseArgs({ prefs, thought: { category: "interview_prep", urgency: "high" } }),
-  );
+  const result = shouldPush(baseArgs({ prefs, thought: { category: "interview_prep", urgency: "high" } }));
   assert.equal(result.allow, false);
   assert.equal(result.reason, "category_disabled");
 });
@@ -170,9 +181,7 @@ test("shouldPush refuses when the category is opted out", () => {
 test("shouldPush refuses silent-mode categories even when enabled", () => {
   const prefs = defaultProactivePrefs();
   prefs.categories.interview_prep = { enabled: true, threshold: "low", deliveryMode: "silent" };
-  const result = shouldPush(
-    baseArgs({ prefs, thought: { category: "interview_prep", urgency: "high" } }),
-  );
+  const result = shouldPush(baseArgs({ prefs, thought: { category: "interview_prep", urgency: "high" } }));
   assert.equal(result.allow, false);
   assert.equal(result.reason, "category_silent");
 });
@@ -180,9 +189,7 @@ test("shouldPush refuses silent-mode categories even when enabled", () => {
 test("shouldPush refuses when urgency is below the category threshold", () => {
   const prefs = defaultProactivePrefs();
   prefs.categories.urgent_email = { enabled: true, threshold: "high", deliveryMode: "push" };
-  const result = shouldPush(
-    baseArgs({ prefs, thought: { category: "urgent_email", urgency: "medium" } }),
-  );
+  const result = shouldPush(baseArgs({ prefs, thought: { category: "urgent_email", urgency: "medium" } }));
   assert.equal(result.allow, false);
   assert.equal(result.reason, "below_threshold");
 });
@@ -190,9 +197,7 @@ test("shouldPush refuses when urgency is below the category threshold", () => {
 test("shouldPush allows when all gates pass", () => {
   const prefs = defaultProactivePrefs();
   prefs.categories.urgent_email = { enabled: true, threshold: "medium", deliveryMode: "push" };
-  const result = shouldPush(
-    baseArgs({ prefs, thought: { category: "urgent_email", urgency: "high" } }),
-  );
+  const result = shouldPush(baseArgs({ prefs, thought: { category: "urgent_email", urgency: "high" } }));
   assert.equal(result.allow, true);
   assert.equal(result.reason, "ok");
 });
@@ -375,9 +380,7 @@ test("inQuietHours: empty window (start === end) is never quiet", () => {
 
 test("inQuietHours: bad timezone falls back to server local, doesn't throw", () => {
   // Use a non-wrapping window so the local-time fallback is deterministic.
-  assert.doesNotThrow(() =>
-    inQuietHours("00:00", "23:59", new Date(), "Mars/Olympus_Mons"),
-  );
+  assert.doesNotThrow(() => inQuietHours("00:00", "23:59", new Date(), "Mars/Olympus_Mons"));
 });
 
 test("inQuietHours: respects the user's timezone", () => {
@@ -398,7 +401,9 @@ test("isAvailableNowActive: null window is never active", () => {
 test("isAvailableNowActive: expired window is not active", () => {
   const window = {
     until: new Date(Date.now() - 1000).toISOString(),
-    categories: /** @type {import("../src/notifications/proactive.mjs").ProactiveCategory[]} */ (["interview_prep"]),
+    categories: /** @type {import("../src/notifications/proactive.mjs").ProactiveCategory[]} */ ([
+      "interview_prep",
+    ]),
     reason: "test",
   };
   assert.equal(isAvailableNowActive(window, "interview_prep", new Date()), false);
@@ -455,6 +460,21 @@ test("appendThought defaults urgency to medium when missing", () => {
   assert.equal(thought.urgency, "medium");
 });
 
+test("appendThought bounds and JSON-normalizes arbitrary metadata", () => {
+  seed();
+  const cyclic = /** @type {Record<string, unknown>} */ ({ label: "kept", nested: { ok: true } });
+  cyclic.self = cyclic;
+  const thought = appendThought(USER, {
+    category: "briefing_ready",
+    title: "t",
+    body: "b",
+    data: cyclic,
+  });
+  assert.equal(thought.data.self, undefined);
+  assert.equal(thought.data._truncated, true);
+  assert.doesNotThrow(() => JSON.stringify(thought));
+});
+
 test("listThoughts filters by status and limit", () => {
   seed();
   for (let i = 0; i < 3; i++) {
@@ -470,6 +490,15 @@ test("listThoughts filters by status and limit", () => {
 
   const limited = listThoughts(USER, { limit: 2 });
   assert.equal(limited.length, 2);
+});
+
+test("listThoughts uses a finite bounded limit for malformed options", () => {
+  seed();
+  for (let i = 0; i < 3; i++)
+    appendThought(USER, { category: "briefing_ready", title: `t${i}`, body: `b${i}` });
+  assert.equal(listThoughts(USER, { limit: Number.NaN }).length, 3);
+  assert.equal(listThoughts(USER, { limit: 0 }).length, 1);
+  assert.equal(listThoughts(USER, { limit: 1.5 }).length, 3);
 });
 
 test("markThought updates status and feedback", () => {
@@ -556,4 +585,19 @@ test("dispatchProactive records suppression reason when category is disabled", a
   assert.equal(decision.reason, "category_disabled");
   assert.equal(thought.pushed, false);
   assert.equal(thought.pushSuppressedReason, "category_disabled");
+});
+
+test("dispatchProactive honors the legacy pushEnabled master switch", async () => {
+  seed();
+  state.users[USER].preferences.pushEnabled = false;
+  const { thought, decision } = await dispatchProactive(USER, {
+    category: "briefing_ready",
+    urgency: "critical",
+    title: "New mail",
+    body: "Review your inbox",
+  });
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "push_disabled");
+  assert.equal(thought.pushSuppressedReason, "push_disabled");
+  assert.equal(thought.pushed, false);
 });

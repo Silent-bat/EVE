@@ -95,9 +95,7 @@ export function SuggestionCard({
               active={thought.feedback === "helpful"}
             />
           ) : null}
-          {onDismiss ? (
-            <FeedbackButton icon="close" label="Not now" onPress={onDismiss} />
-          ) : null}
+          {onDismiss ? <FeedbackButton icon="close" label="Not now" onPress={onDismiss} /> : null}
         </View>
       ) : null}
     </CardShell>

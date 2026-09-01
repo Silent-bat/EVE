@@ -64,12 +64,7 @@ export function OrbView({ spec, reference }: Props) {
           <h1 className="view__title">{spec.label}</h1>
           <p className="view__note">{spec.note}</p>
         </div>
-        <button
-          type="button"
-          className="btn"
-          aria-pressed={compare}
-          onClick={() => setCompare((v) => !v)}
-        >
+        <button type="button" className="btn" aria-pressed={compare} onClick={() => setCompare((v) => !v)}>
           {compare ? "Hide reference" : "Show reference"}
         </button>
       </header>

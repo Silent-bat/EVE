@@ -13,7 +13,7 @@
  */
 import { httpError } from "../http/responses.mjs";
 import { getPool, save, state } from "../storage/index.mjs";
-import { hashPassword, verifyPassword } from "./password.mjs";
+import { hashPassword, MAX_PASSWORD_CHARS, verifyPassword } from "./password.mjs";
 
 /** Longest display name we'll store. Long enough for any real name. */
 const MAX_NAME = 80;
@@ -62,6 +62,8 @@ export async function changePassword(userID, input) {
   const next = String(input.newPassword || "");
   if (!current || !next) throw httpError(400, "currentPassword and newPassword are required");
   if (next.length < 8) throw httpError(400, "newPassword must be at least 8 characters");
+  if (next.length > MAX_PASSWORD_CHARS)
+    throw httpError(400, `newPassword must be at most ${MAX_PASSWORD_CHARS} characters`);
   if (next === current) throw httpError(400, "the new password matches the old one");
 
   const user = state.users[userID];
@@ -76,7 +78,10 @@ export async function changePassword(userID, input) {
   const passwordHash = await hashPassword(next);
   const pool = getPool();
   if (pool) {
-    await pool.query("update users set password_hash = $1 where id = $2", [passwordHash, userID]);
+    await pool.query("update users set password_hash = $1, password_auth_enabled = true where id = $2", [
+      passwordHash,
+      userID,
+    ]);
   }
   if (user) user.passwordHash = passwordHash;
   await save();
@@ -100,27 +105,35 @@ export async function disconnectGoogle(userID) {
   const user = state.users[userID];
   if (!user) throw httpError(404, "account not found");
 
+  await clearGoogleCredentials(userID, { revokeGrant: true });
+
+  return { googleConnected: false, connectionMode: "none" };
+}
+
+/**
+ * Remove credentials locally before a session is discarded. `revokeGrant` is
+ * opt-in because ordinary logout must never wait on Google's network; the
+ * local deletion is the security boundary and the remote revoke is best effort.
+ *
+ * @param {string} userID
+ * @param {{ revokeGrant?: boolean }} [options]
+ */
+export async function clearGoogleCredentials(userID, { revokeGrant = false } = {}) {
+  const user = state.users[userID];
+  if (!user) throw httpError(404, "account not found");
   const token = user.googleTokens?.access_token || user.googleTokens?.refresh_token || "";
   delete user.googleTokens;
   user.googleConnected = false;
   user.connectionMode = "none";
   await save();
-
-  // Best-effort: tell Google too. A failure here doesn't undo the local
-  // disconnect — the tokens are already gone from our side.
-  if (token) {
-    try {
-      await fetch("https://oauth2.googleapis.com/revoke", {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ token }).toString(),
-      });
-    } catch {
-      /* the grant may already be gone; nothing to do */
-    }
+  if (revokeGrant && token) {
+    void fetch("https://oauth2.googleapis.com/revoke", {
+      method: "POST",
+      signal: AbortSignal.timeout(10_000),
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }).toString(),
+    }).catch(() => undefined);
   }
-
-  return { googleConnected: false, connectionMode: "none" };
 }
 
 /**
@@ -161,6 +174,13 @@ export async function revokeAllSessions(userID) {
 async function passwordHashFromPool(userID) {
   const pool = getPool();
   if (!pool) return "";
-  const result = await pool.query("select password_hash from users where id = $1", [userID]);
+  const result = await pool.query(
+    `select password_hash
+     from users
+     where id = $1
+       and password_hash is not null
+       and password_auth_enabled is distinct from false`,
+    [userID],
+  );
   return result.rows[0]?.password_hash || "";
 }

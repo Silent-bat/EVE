@@ -6,15 +6,7 @@
  */
 import { Ionicons } from "@expo/vector-icons";
 import type { ReactNode } from "react";
-import {
-  Animated,
-  Pressable,
-  StyleSheet,
-  Switch,
-  Text,
-  View,
-  type ViewStyle,
-} from "react-native";
+import { Animated, Pressable, StyleSheet, Switch, Text, View, type ViewStyle } from "react-native";
 
 import { elevation, HIT_SLOP, MIN_TOUCH, radius, spacing, type Tone } from "./theme";
 import { useTheme, useThemedStyles, type ThemeValue } from "./ThemeContext";
@@ -64,13 +56,7 @@ export function Chip({
   const { toneSurface, toneInk } = useTheme();
   const styles = useThemedStyles(makeStyles);
   return (
-    <View
-      style={[
-        styles.chip,
-        compact ? styles.chipCompact : null,
-        { backgroundColor: toneSurface(tone) },
-      ]}
-    >
+    <View style={[styles.chip, compact ? styles.chipCompact : null, { backgroundColor: toneSurface(tone) }]}>
       {icon ? <Ionicons name={icon} size={11} color={toneInk(tone)} /> : null}
       <Text style={[styles.chipText, { color: toneInk(tone) }]}>{label}</Text>
     </View>
@@ -79,15 +65,7 @@ export function Chip({
 
 // ---------- Section header ----------
 
-export function SectionHeader({
-  title,
-  note,
-  action,
-}: {
-  title: string;
-  note?: string;
-  action?: ReactNode;
-}) {
+export function SectionHeader({ title, note, action }: { title: string; note?: string; action?: ReactNode }) {
   const styles = useThemedStyles(makeStyles);
   return (
     <View style={styles.sectionHeader}>
@@ -329,10 +307,7 @@ export function Banner({
   const styles = useThemedStyles(makeStyles);
   return (
     <View
-      style={[
-        styles.banner,
-        { backgroundColor: toneSurface(tone), borderColor: toneAccent(tone) + "33" },
-      ]}
+      style={[styles.banner, { backgroundColor: toneSurface(tone), borderColor: toneAccent(tone) + "33" }]}
     >
       {icon ? (
         <View style={[styles.bannerIcon, { backgroundColor: toneAccent(tone) }]}>

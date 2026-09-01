@@ -876,10 +876,7 @@ const MIN_SPRITE_PX = 4.0;
  * solve inside setupGL, where the exact figure matters and is available.
  */
 function solveCountCeiling(pixels: number): number {
-  return Math.max(
-    1,
-    Math.round((TARGET_COVERAGE * Math.pow(FIT * pixels, 2)) / Math.pow(MIN_SPRITE_PX, 2)),
-  );
+  return Math.max(1, Math.round((TARGET_COVERAGE * Math.pow(FIT * pixels, 2)) / Math.pow(MIN_SPRITE_PX, 2)));
 }
 
 /**
@@ -927,12 +924,7 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
  * ROTATED z. For a spherical shell the distribution of z is rotation-invariant,
  * so the two are statistically identical and this needs no camera.
  */
-function solvePointBase(
-  vertices: Float32Array,
-  count: number,
-  width: number,
-  height: number,
-): number {
+function solvePointBase(vertices: Float32Array, count: number, width: number, height: number): number {
   let sum = 0;
   for (let i = 0; i < count; i += 1) {
     const o = i * STRIDE_FLOATS;
@@ -1260,10 +1252,7 @@ export function ParticleFieldGL({
     // Some GL ES drivers silently drop a point sprite larger than their
     // advertised maximum, which would make the nearest, largest points vanish
     // rather than merely clip. Clamp in the shader to whatever this GPU allows.
-    const range = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE) as
-      | Float32Array
-      | [number, number]
-      | null;
+    const range = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE) as Float32Array | [number, number] | null;
     const maxPoint = range && range[1] ? Number(range[1]) : 64;
     gl.uniform1f(gl.getUniformLocation(program, "u_maxPoint"), maxPoint);
 

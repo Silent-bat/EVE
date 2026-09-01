@@ -8,6 +8,7 @@
   "workspaces": [
     "apps/mobile",
     "apps/orb-test",
+    "apps/promo",
     "services/api-node"
   ],
   "scripts": {
@@ -17,7 +18,9 @@
     "mobile:start": "pnpm --filter @eve/mobile start",
     "mobile:test": "pnpm --filter @eve/mobile test",
     "mobile:typecheck": "pnpm --filter @eve/mobile typecheck",
-    "typecheck": "pnpm api:typecheck && pnpm mobile:typecheck",
+    "orb:typecheck": "pnpm --filter @eve/orb-test typecheck",
+    "promo:typecheck": "pnpm --filter @eve/promo typecheck",
+    "typecheck": "pnpm api:typecheck && pnpm mobile:typecheck && pnpm orb:typecheck && pnpm promo:typecheck",
     "test": "pnpm api:test && pnpm mobile:test",
     "lint": "pnpm exec eslint .",
     "lint:fix": "pnpm exec eslint --fix .",
@@ -25,16 +28,16 @@
     "format:check": "pnpm exec prettier --check .",
     "preview": "node apps/preview/server.mjs",
     "orb:dev": "pnpm --filter @eve/orb-test dev",
-    "orb:capture": "pnpm --filter @eve/orb-test capture"
-  },
-  "dependencies": {
-    "eas-cli": "^20.0.0"
+    "orb:capture": "pnpm --filter @eve/orb-test capture",
+    "promo:studio": "pnpm --filter @eve/promo studio",
+    "promo:render": "pnpm --filter @eve/promo render"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.0",
     "eslint": "^9.30.0",
     "eslint-plugin-n": "^17.20.0",
     "eslint-plugin-promise": "^7.2.1",
+    "eas-cli": "^20.0.0",
     "globals": "^17.6.0",
     "prettier": "^3.4.4",
     "typescript-eslint": "^8.42.0"
