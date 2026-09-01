@@ -1,10 +1,9 @@
 /**
- * Local on-device cache for instant cold-start rendering.
+ * Process-local cache for fast in-session rendering.
  *
  * The server-side Postgres is the source of truth — this layer only
- * exists so the UI shows the user's last-known briefing / audit /
- * preferences / voice conversation immediately on app open, instead of
- * waiting 3-5 seconds for loadV1 to settle.
+ * It deliberately does not survive a restart: these values are private user
+ * data and AsyncStorage is plaintext and included in device backups.
  *
  * Every cache key is namespaced with the authenticated userID so a
  * different user signing in on the same device never sees the previous
@@ -14,8 +13,6 @@
  * Failures are swallowed and treated as cache-misses. The app must
  * always be functional with an empty cache (server reload re-fills it).
  */
-import AsyncStorage from "@react-native-async-storage/async-storage";
-
 import type {
   AssistantAnswer,
   AuditEntry,
@@ -26,38 +23,25 @@ import type {
 } from "../types";
 import type { LiveTurn } from "../voice/useGeminiLive";
 
+// Briefings, audit entries, notifications, and transcripts are private user
+// data. Keep the cache process-local instead of writing it to AsyncStorage,
+// which is plaintext and included in device backups. The server remains the
+// source of truth and repopulates these values after a restart.
 const NAMESPACE = "eve.cache.v1";
-const LAST_USER_ID_KEY = "eve.lastUserId";
+const memoryCache = new Map<string, unknown>();
+let lastUserID: string | null = null;
 
 /**
  * Remember which user this device most recently authenticated as so the
- * next cold start can hydrate cache values BEFORE /v1/session returns
- * the real userID. We never use this for auth — only to look up
- * already-stored cache entries.
+ * The value is process-local and is never used for authentication.
  */
 export async function rememberLastUserID(userID: string): Promise<void> {
   if (!userID) return;
-  try {
-    await AsyncStorage.setItem(LAST_USER_ID_KEY, userID);
-  } catch {
-    // best-effort
-  }
+  lastUserID = userID;
 }
 
 export async function readLastUserID(): Promise<string | null> {
-  try {
-    return await AsyncStorage.getItem(LAST_USER_ID_KEY);
-  } catch {
-    return null;
-  }
-}
-
-async function forgetLastUserID(): Promise<void> {
-  try {
-    await AsyncStorage.removeItem(LAST_USER_ID_KEY);
-  } catch {
-    // best-effort
-  }
+  return lastUserID;
 }
 
 // Keep this list small. Anything that grows unbounded (e.g. every
@@ -80,27 +64,15 @@ function key(userID: string, name: CacheKey): string {
 }
 
 /**
- * Read a single value. Returns null on miss, parse error, or transport
- * error — caller decides the fallback.
+ * Read a single value. Returns null on a miss.
  */
-export async function readCache<K extends CacheKey>(
-  userID: string,
-  name: K,
-): Promise<CacheShape[K] | null> {
+export async function readCache<K extends CacheKey>(userID: string, name: K): Promise<CacheShape[K] | null> {
   if (!userID) return null;
-  try {
-    const raw = await AsyncStorage.getItem(key(userID, name));
-    if (!raw) return null;
-    return JSON.parse(raw) as CacheShape[K];
-  } catch {
-    return null;
-  }
+  return (memoryCache.get(key(userID, name)) as CacheShape[K] | undefined) ?? null;
 }
 
 /**
- * Write a value. Silent failure — caching is a UX optimization, not a
- * correctness requirement. Skip writes for the local sentinel user so
- * we don't pollute the cache before auth.
+ * Write a value. Caching is a UX optimization, not a correctness requirement.
  */
 export async function writeCache<K extends CacheKey>(
   userID: string,
@@ -108,24 +80,13 @@ export async function writeCache<K extends CacheKey>(
   value: CacheShape[K],
 ): Promise<void> {
   if (!userID) return;
-  try {
-    await AsyncStorage.setItem(key(userID, name), JSON.stringify(value));
-  } catch {
-    // best-effort
-  }
+  memoryCache.set(key(userID, name), value);
 }
 
 /**
- * Drop every cached value for every user on this device. Used at
- * logout so the next person who signs in starts from a clean slate.
+ * Drop every cached value for every user in this process. Used at logout.
  */
 export async function clearAllCache(): Promise<void> {
-  try {
-    const keys = await AsyncStorage.getAllKeys();
-    const ours = keys.filter((k) => k.startsWith(`${NAMESPACE}.`));
-    if (ours.length > 0) await AsyncStorage.multiRemove(ours);
-  } catch {
-    // best-effort
-  }
-  await forgetLastUserID();
+  memoryCache.clear();
+  lastUserID = null;
 }

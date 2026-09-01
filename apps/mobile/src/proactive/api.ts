@@ -36,22 +36,17 @@ export async function fetchInbox(
   if (opts.limit) params.set("limit", String(opts.limit));
   if (opts.since) params.set("since", opts.since);
   const query = params.toString();
-  return apiFetch<{ thoughts: ProactiveThought[] }>(
-    `/v1/proactive/inbox${query ? `?${query}` : ""}`,
-  );
+  return apiFetch<{ thoughts: ProactiveThought[] }>(`/v1/proactive/inbox${query ? `?${query}` : ""}`);
 }
 
 export async function markThought(
   id: string,
   patch: { status?: ProactiveThoughtStatus; feedback?: ProactiveThoughtFeedback },
 ): Promise<ProactiveThought> {
-  return apiFetch<ProactiveThought>(
-    `/v1/proactive/inbox/${encodeURIComponent(id)}/mark`,
-    {
-      method: "POST",
-      body: JSON.stringify(patch),
-    },
-  );
+  return apiFetch<ProactiveThought>(`/v1/proactive/inbox/${encodeURIComponent(id)}/mark`, {
+    method: "POST",
+    body: JSON.stringify(patch),
+  });
 }
 
 export async function startAvailableNow(input: {

@@ -541,11 +541,11 @@ function build(targetCount: number): OrbGeometry {
     const t = rnd();
     let shell: number;
     if (t < 0.58) {
-      shell = 0.952 + rnd() * 0.030;
+      shell = 0.952 + rnd() * 0.03;
     } else if (t < 0.79) {
       shell = 0.62 + rnd() * 0.31;
     } else if (t < 0.85) {
-      shell = 0.05 + rnd() * 0.30;
+      shell = 0.05 + rnd() * 0.3;
     } else {
       // Outward-biased: only a shell whose own silhouette lies past a radius
       // can put light there, so an inward bias starves the outer annulus that

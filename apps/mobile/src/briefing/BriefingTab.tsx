@@ -157,9 +157,7 @@ export function BriefingTab({
             ))}
             {tasks.done.length > 0 ? (
               <>
-                <Text style={styles.doneHeading}>
-                  Done · {tasks.done.length}
-                </Text>
+                <Text style={styles.doneHeading}>Done · {tasks.done.length}</Text>
                 {tasks.done.map((task) => (
                   <TaskCard
                     key={task.id}
@@ -229,9 +227,7 @@ function useTasks(onError: (message: string) => void) {
       const done = task.status === "done";
       setBusyId(task.id);
       setItems((current) =>
-        current.map((item) =>
-          item.id === task.id ? { ...item, status: done ? "open" : "done" } : item,
-        ),
+        current.map((item) => (item.id === task.id ? { ...item, status: done ? "open" : "done" } : item)),
       );
       try {
         const saved = await setTaskDone(task.id, !done);

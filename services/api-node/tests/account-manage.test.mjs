@@ -11,12 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  changePassword,
-  disconnectGoogle,
-  revokeAllSessions,
-  setDisplayName,
-} from "../src/auth/account.mjs";
+import { changePassword, disconnectGoogle, revokeAllSessions, setDisplayName } from "../src/auth/account.mjs";
 import { hashPassword } from "../src/auth/password.mjs";
 import { state } from "../src/storage/index.mjs";
 import { ensureUserIn } from "../src/storage/state.mjs";
@@ -72,6 +67,10 @@ test("changePassword validates both fields before touching the hash", async () =
   await assert.rejects(
     () => changePassword(USER, { currentPassword: "correct-horse", newPassword: "correct-horse" }),
     /matches the old one/i,
+  );
+  await assert.rejects(
+    () => changePassword(USER, { currentPassword: "correct-horse", newPassword: "x".repeat(257) }),
+    /at most 256/i,
   );
 });
 

@@ -14,6 +14,7 @@ import { moduleLogger } from "../logger.mjs";
 import { config } from "../config.mjs";
 import { httpError } from "../http/responses.mjs";
 import { state } from "../storage/index.mjs";
+import { readBoundedResponseJSON } from "../google/oauth.mjs";
 
 const log = moduleLogger("notifications.push");
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
@@ -42,6 +43,13 @@ export function registerPushToken(userID, input) {
   }
   const user = state.users[userID];
   if (!user) throw httpError(404, "user not found");
+  let platform;
+  if (input?.platform !== undefined) {
+    if (typeof input.platform !== "string" || !/^[a-z0-9_-]{1,16}$/i.test(input.platform)) {
+      throw httpError(400, "platform must be a short identifier");
+    }
+    platform = input.platform.toLowerCase();
+  }
 
   user.pushTokens ||= [];
   // Move to front (most-recently-active wins if we ever evict)
@@ -50,9 +58,7 @@ export function registerPushToken(userID, input) {
     ...user.pushTokens.filter((/** @type {string} */ t) => t !== token),
   ].slice(0, TOKEN_LIMIT_PER_USER);
 
-  if (typeof input?.platform === "string") {
-    user.pushPlatform = input.platform;
-  }
+  if (platform) user.pushPlatform = platform;
   user.pushTokenUpdatedAt = new Date().toISOString();
 
   return { tokens: user.pushTokens.length };
@@ -68,6 +74,25 @@ export function dropPushToken(userID, token) {
   const user = state.users[userID];
   if (!user?.pushTokens) return;
   user.pushTokens = user.pushTokens.filter((/** @type {string} */ t) => t !== token);
+}
+
+/**
+ * Remove one installation token, or every token when none is supplied.
+ *
+ * @param {string} userID
+ * @param {string} [token]
+ */
+export function unregisterPushToken(userID, token = "") {
+  const user = state.users[userID];
+  if (!user) throw httpError(404, "user not found");
+  if (token) {
+    dropPushToken(userID, token);
+  } else {
+    delete user.pushTokens;
+    delete user.pushPlatform;
+    delete user.pushTokenUpdatedAt;
+  }
+  return { tokens: user.pushTokens?.length || 0 };
 }
 
 /**
@@ -115,7 +140,7 @@ export async function sendPushToUser(userID, payload) {
 
   let body = null;
   try {
-    body = /** @type {any} */ (await response.json());
+    body = /** @type {any} */ (await readBoundedResponseJSON(response, config.googleResponseMaxBytes));
   } catch {
     return { sent: 0 };
   }

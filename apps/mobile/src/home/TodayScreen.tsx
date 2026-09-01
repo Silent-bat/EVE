@@ -24,21 +24,9 @@ import { StatStrip } from "./StatStrip";
 import { TodayHeader } from "./TodayHeader";
 import { displayName, type DayContext } from "./greeting";
 import { fetchInbox, markThought } from "../proactive/api";
-import {
-  AttentionCard,
-  CalendarCard,
-  NextUpCard,
-  Section,
-  SuggestionCard,
-} from "../ui/components";
+import { AttentionCard, CalendarCard, NextUpCard, Section, SuggestionCard } from "../ui/components";
 import { spacing } from "../ui/theme";
-import type {
-  Briefing,
-  BriefingEmail,
-  CalendarEvent,
-  EmailStatus,
-  ProactiveThought,
-} from "../types";
+import type { Briefing, BriefingEmail, CalendarEvent, EmailStatus, ProactiveThought } from "../types";
 
 type Props = {
   briefing: Briefing;

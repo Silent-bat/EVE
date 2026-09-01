@@ -56,15 +56,7 @@ export type OrbCanvasProps = {
   className?: string;
 };
 
-export function OrbCanvas({
-  spec,
-  count,
-  flow,
-  size,
-  energy,
-  freeze,
-  className,
-}: OrbCanvasProps) {
+export function OrbCanvas({ spec, count, flow, size, energy, freeze, className }: OrbCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [error, setError] = useState<string | null>(null);
 

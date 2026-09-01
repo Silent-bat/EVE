@@ -12,11 +12,12 @@ import { AppState, Linking, Platform, ScrollView, StyleSheet, View } from "react
 // this one instead.
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
-import { config } from "./src/config";
+import { assertSecureTransport, config } from "./src/config";
 import { apiFetch as apiFetchClient, ApiError, tokenStore } from "./src/api/client";
-import { configureForegroundHandler, registerPushToken } from "./src/notifications/push";
+import { configureForegroundHandler, registerPushToken, unregisterPushToken } from "./src/notifications/push";
 import {
   configureNotificationSync,
+  clearNotificationSync,
   isNotificationAccessGranted,
   notificationAccessSupported,
   openNotificationAccessSettings,
@@ -56,7 +57,6 @@ import { ErrorBanner } from "./src/ui/primitives";
 import { FadeSlideIn } from "./src/ui/motion";
 import { BottomNav, BOTTOM_NAV_CLEARANCE, type NavTab } from "./src/ui/components";
 import { TodayScreen } from "./src/home/TodayScreen";
-import { ChatModal } from "./src/chat/ChatModal";
 import { BriefingTab } from "./src/briefing/BriefingTab";
 import { MailScreen } from "./src/briefing/MailScreen";
 import { AuditTab } from "./src/audit/AuditTab";
@@ -64,9 +64,9 @@ import { useListenFromHomeEnabled } from "./src/settings/devicePrefs";
 import { SettingsTab, type SettingsEntry } from "./src/settings/SettingsTab";
 import { Sidebar, type SidebarDestination } from "./src/settings/Sidebar";
 import { ChatScreen } from "./src/chat/ChatScreen";
+import { clearAllChatHistory } from "./src/chat/history";
 import { fetchInbox } from "./src/proactive/api";
 import { VoiceScreen } from "./src/voice/VoiceScreen";
-import { OrbTestScreen } from "./src/voice/OrbTestScreen";
 import { clearVoiceCache } from "./src/voice/cache";
 import {
   clearAllCache,
@@ -76,7 +76,7 @@ import {
   writeCache,
 } from "./src/storage/localCache";
 
-import { tokenFromURL } from "./src/utils/formatters";
+import { oauthCodeFromURL } from "./src/utils/formatters";
 import {
   DEFAULT_PREFERENCES,
   EMPTY_BRIEFING,
@@ -155,7 +155,6 @@ function EVEApp() {
   const [authChecked, setAuthChecked] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [tab, setTab] = useState<Tab>("today");
-  const [chatVisible, setChatVisible] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   /**
    * Which settings page is open, or null for none. Settings left the nav bar
@@ -181,7 +180,6 @@ function EVEApp() {
   const [apiError, setApiError] = useState<string | null>(null);
   const [inboxNewCount, setInboxNewCount] = useState(0);
   const [voiceVisible, setVoiceVisible] = useState(false);
-  const [orbTestVisible, setOrbTestVisible] = useState(false);
   /**
    * The mail being read, if any. Held here rather than per-tab because both
    * Home and Briefing open it and the modal has to outlive a tab switch — and
@@ -197,9 +195,18 @@ function EVEApp() {
   // on it rather than guessing, so a returning user never sees a flash of the
   // first-run flow they already finished.
   const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
+  // Refreshes can overlap (foreground resume, the 30s poll, and a manual
+  // OAuth callback). A response that belongs to an older token must never
+  // repopulate the UI after logout or a newer refresh has won the race.
+  const loadRequestRef = useRef(0);
 
   const loadV1 = useCallback(async () => {
-    if (!authToken) {
+    const requestToken = authToken;
+    const requestID = ++loadRequestRef.current;
+    const isCurrent = () =>
+      requestID === loadRequestRef.current && Boolean(requestToken) && tokenStore.current === requestToken;
+
+    if (!requestToken) {
       setLoading(false);
       return;
     }
@@ -215,6 +222,8 @@ function EVEApp() {
           fetchInbox({ status: "new", limit: 50 }).catch(() => ({ thoughts: [] })),
         ],
       );
+
+      if (!isCurrent()) return;
 
       const safeSession = normalizeSession(nextSession);
       const safeBriefing = normalizeBriefing(nextBriefing);
@@ -238,12 +247,40 @@ function EVEApp() {
         void writeCache(userID, "inboxNewCount", inboxPayload.thoughts.length);
       }
     } catch (error) {
+      if (!isCurrent()) return;
       setApiError(error instanceof Error ? error.message : "API is unavailable");
     } finally {
-      setLoading(false);
-      setBootCompleted(true);
+      if (isCurrent()) {
+        setLoading(false);
+        setBootCompleted(true);
+      }
     }
   }, [authToken, briefingRange]);
+
+  /**
+   * Invalidate any refresh already in flight before a local mutation starts.
+   * The mutation response owns the newest state; an older GET must not be
+   * allowed to paint over it when its network request finally resolves.
+   */
+  const beginStateMutation = useCallback(() => {
+    const requestID = ++loadRequestRef.current;
+    const requestToken = authToken;
+    return () =>
+      requestID === loadRequestRef.current && Boolean(requestToken) && tokenStore.current === requestToken;
+  }, [authToken]);
+
+  const clearCapturedNotifications = useCallback(async () => {
+    const isCurrent = beginStateMutation();
+    try {
+      await apiFetchClient<{ deleted: boolean }>("/v1/device-notifications", { method: "DELETE" });
+      if (!isCurrent()) return;
+      setDeviceNotifications([]);
+      const userID = session?.userId;
+      if (userID) void writeCache(userID, "deviceNotifications", []);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Could not clear captured notifications");
+    }
+  }, [beginStateMutation, session?.userId]);
 
   useEffect(() => {
     let active = true;
@@ -280,8 +317,21 @@ function EVEApp() {
   }, []);
 
   useEffect(() => {
-    if (authToken) void tokenStore.set(authToken);
-    else if (tokenStore.current) void tokenStore.clear();
+    if (authToken) {
+      const tokenBeingStored = authToken;
+      void tokenStore.set(tokenBeingStored).catch(() => {
+        // A secure-store write failure must not become an unhandled promise
+        // rejection or leave the UI believing this session will survive a
+        // restart. Only clear if this is still the active token; a newer login
+        // may have won while the platform write was pending.
+        if (tokenStore.current !== tokenBeingStored) return;
+        setApiError("Could not securely store the session. Sign in again.");
+        setAuthToken(null);
+        void tokenStore.clear().catch(() => undefined);
+      });
+    } else if (tokenStore.current) {
+      void tokenStore.clear().catch(() => undefined);
+    }
   }, [authToken]);
 
   // apiFetch drops the stored token when the server rejects it, which can
@@ -319,14 +369,13 @@ function EVEApp() {
     void (async () => {
       const lastUserID = await readLastUserID();
       if (!lastUserID || !active) return;
-      const [cachedBriefing, cachedAudit, cachedPrefs, cachedDevice, cachedInboxCount] =
-        await Promise.all([
-          readCache(lastUserID, "briefing"),
-          readCache(lastUserID, "audit"),
-          readCache(lastUserID, "preferences"),
-          readCache(lastUserID, "deviceNotifications"),
-          readCache(lastUserID, "inboxNewCount"),
-        ]);
+      const [cachedBriefing, cachedAudit, cachedPrefs, cachedDevice, cachedInboxCount] = await Promise.all([
+        readCache(lastUserID, "briefing"),
+        readCache(lastUserID, "audit"),
+        readCache(lastUserID, "preferences"),
+        readCache(lastUserID, "deviceNotifications"),
+        readCache(lastUserID, "inboxNewCount"),
+      ]);
       if (!active) return;
       if (cachedBriefing) setBriefing(cachedBriefing);
       if (cachedAudit) setAudit(cachedAudit);
@@ -434,8 +483,22 @@ function EVEApp() {
 
   useEffect(() => {
     if (!authToken || !notificationAccessSupported) return;
-    configureNotificationSync(API_BASE_URL, authToken);
+    const configureSync = () => {
+      try {
+        assertSecureTransport(API_BASE_URL);
+        configureNotificationSync(API_BASE_URL, authToken);
+      } catch (error) {
+        setApiError(error instanceof Error ? error.message : "Secure API URL required");
+      }
+    };
+    // The Android listener service continues running while the React app is
+    // backgrounded. Keep its encrypted credentials in place; clearing them on
+    // every inactive transition made background capture silently stop.
+    configureSync();
     void isNotificationAccessGranted().then(setNotificationAccessEnabled);
+    const appStateSubscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") configureSync();
+    });
     const unsubscribePermission = subscribeToNotificationPermission((event) => {
       setNotificationAccessEnabled(Boolean(event.enabled));
     });
@@ -452,22 +515,19 @@ function EVEApp() {
         body: event.body,
         postedAt,
       };
-      void apiFetch<DeviceNotification>("/v1/device-notifications", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      })
-        .then((saved) =>
-          setDeviceNotifications((current) =>
-            [saved, ...current.filter((item) => item.id !== saved.id)].slice(0, 30),
-          ),
-        )
-        .catch((error) =>
-          setApiError(error instanceof Error ? error.message : "Could not sync notification"),
-        );
+      // The native listener owns the network write (including retries and
+      // idempotency) so foreground JS and the Android service cannot upload the
+      // same notification twice. This event only updates the visible list; the
+      // next refresh reads the server-authoritative record.
+      setDeviceNotifications((current) =>
+        [payload as DeviceNotification, ...current.filter((item) => item.id !== payload.id)].slice(0, 30),
+      );
     });
     return () => {
       unsubscribePermission();
       unsubscribeNotifications();
+      appStateSubscription.remove();
+      clearNotificationSync();
     };
   }, [authToken]);
 
@@ -477,13 +537,26 @@ function EVEApp() {
   );
 
   const finishGoogleLogin = useCallback(async (url: string) => {
-    const token = tokenFromURL(url);
-    if (!token) return false;
-    await tokenStore.set(token);
-    setAuthToken(token);
-    setApiError(null);
-    setLoading(true);
-    return true;
+    const code = oauthCodeFromURL(url);
+    if (!code) return false;
+    try {
+      const result = await apiFetch<{ token: string; session: Session }>(
+        "/v1/auth/google-exchange",
+        { method: "POST", body: JSON.stringify({ code }) },
+        null,
+      );
+      await tokenStore.set(result.token);
+      const safeSession = normalizeSession(result.session);
+      setAuthToken(result.token);
+      setSession(safeSession);
+      setPreferences(safeSession.preferences);
+      setApiError(null);
+      setLoading(true);
+      return true;
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "Google login could not be completed");
+      return false;
+    }
   }, []);
 
   useEffect(() => {
@@ -498,16 +571,6 @@ function EVEApp() {
     });
     return () => subscription.remove();
   }, [finishGoogleLogin]);
-
-  useEffect(() => {
-    if (!__DEV__) return;
-    const openIfOrbTest = (url: string | null) => {
-      if (url?.startsWith("eve://orb-test")) setOrbTestVisible(true);
-    };
-    void Linking.getInitialURL().then(openIfOrbTest);
-    const subscription = Linking.addEventListener("url", (event) => openIfOrbTest(event.url));
-    return () => subscription.remove();
-  }, []);
 
   async function submitAuth({ email, password, mode }: { email: string; password: string; mode: AuthMode }) {
     setSaving(true);
@@ -530,8 +593,8 @@ function EVEApp() {
   }
 
   // Hands the browser the consent URL and lets the `eve://` deep link
-  // carry the session token back. Works off the web client, so it is
-  // unaffected by the Android client's certificate registration.
+  // carry a one-use handoff code back. The bearer session token is exchanged
+  // over the API instead of travelling through the URL.
   async function startGoogleWebLogin() {
     const returnTo = googleLoginReturnURL();
     const auth = await apiFetch<{ configured: boolean; url: string | null; reason?: string }>(
@@ -610,6 +673,13 @@ function EVEApp() {
 
   async function logout() {
     setSaving(true);
+    // Invalidate any refresh that is still awaiting the old account's data.
+    loadRequestRef.current += 1;
+    // Remove this installation from push delivery while the bearer session is
+    // still valid. The server logout route revokes that session, so doing this
+    // afterward would leave the old account subscribed on a shared phone.
+    await unregisterPushToken();
+    clearNotificationSync();
     try {
       await apiFetch<{ ok: boolean }>("/v1/auth/logout", { method: "POST" });
     } catch {
@@ -654,6 +724,7 @@ function EVEApp() {
     } catch {
       // best-effort
     }
+    await clearAllChatHistory();
     // Drop the first-run record too. It is device-scoped, so leaving it behind
     // would hand the next account either a finished flow it never did or a
     // half-finished one belonging to somebody else.
@@ -675,7 +746,6 @@ function EVEApp() {
     setPreferences(DEFAULT_PREFERENCES);
     setDeviceNotifications([]);
     setInboxNewCount(0);
-    setChatVisible(false);
     setVoiceVisible(false);
   }
 
@@ -697,10 +767,12 @@ function EVEApp() {
   }
 
   async function refreshBriefing() {
+    const isCurrent = beginStateMutation();
     setSaving(true);
     setApiError(null);
     try {
       await apiFetch("/v1/gmail/poll", { method: "POST" });
+      if (!isCurrent()) return;
       await loadV1();
       setTab("briefing");
     } catch (error) {
@@ -712,6 +784,7 @@ function EVEApp() {
 
   async function recordAction(emailId: string, status: EmailStatus, draft?: string) {
     if (status === "pending") return;
+    const isCurrent = beginStateMutation();
     setSaving(true);
     setApiError(null);
     try {
@@ -725,6 +798,7 @@ function EVEApp() {
           }),
         },
       );
+      if (!isCurrent()) return;
       setBriefing(result.briefing);
       setAudit((current) => {
         const next = [result.audit, ...current];
@@ -740,6 +814,7 @@ function EVEApp() {
   }
 
   async function updatePreferences(nextPreferences: Preferences) {
+    const isCurrent = beginStateMutation();
     setPreferences(nextPreferences);
     setApiError(null);
     try {
@@ -747,6 +822,7 @@ function EVEApp() {
         method: "PUT",
         body: JSON.stringify(nextPreferences),
       });
+      if (!isCurrent()) return;
       setPreferences(saved);
       if (session?.userId) void writeCache(session.userId, "preferences", saved);
     } catch (error) {
@@ -755,13 +831,6 @@ function EVEApp() {
   }
 
   // --- screen routing --------------------------------------------------
-
-  // A deep-linked renderer harness for physical-device tuning. It exists only
-  // in development builds and deliberately sits before auth routing so an
-  // expired account grant cannot prevent testing a visual component.
-  if (__DEV__ && orbTestVisible) {
-    return <OrbTestScreen onClose={() => setOrbTestVisible(false)} />;
-  }
 
   // Show the full-screen boot only on the very first start — once the initial
   // loadV1 has completed (success OR explicit error), subsequent background
@@ -873,6 +942,7 @@ function EVEApp() {
               setPreferences((current) => ({ ...current, briefingTime }))
             }
             onOpenNotificationAccessSettings={openNotificationAccessSettings}
+            onClearNotifications={clearCapturedNotifications}
             onError={setApiError}
             onNavigate={() => scrollRef.current?.scrollTo({ y: 0, animated: false })}
           />
@@ -890,7 +960,7 @@ function EVEApp() {
       {tab === "messages" ? (
         <View style={styles.flex}>
           {errorBanner}
-          <ChatScreen />
+          <ChatScreen userID={session.userId} />
         </View>
       ) : (
         <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
@@ -963,15 +1033,10 @@ function EVEApp() {
         }}
       />
 
-      <ChatModal visible={chatVisible} onClose={() => setChatVisible(false)} onOpenVoice={() => {
-        setChatVisible(false);
-        setVoiceVisible(true);
-      }} />
-
       {/* Read from the briefing rather than from the captured row, so approving
           from inside the message updates the message you are still looking at. */}
       <MailScreen
-        email={openEmail ? briefing.emails.find((item) => item.id === openEmail.id) ?? openEmail : null}
+        email={openEmail ? (briefing.emails.find((item) => item.id === openEmail.id) ?? openEmail) : null}
         visible={openEmail !== null}
         saving={saving}
         onAction={(emailId, status) => void recordAction(emailId, status)}

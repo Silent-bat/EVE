@@ -106,9 +106,7 @@ export function SettingsRowItem({
       ) : null}
 
       <View style={styles.text}>
-        <Text style={[styles.title, destructive ? { color: palette.dangerDeep } : null]}>
-          {title}
-        </Text>
+        <Text style={[styles.title, destructive ? { color: palette.dangerDeep } : null]}>{title}</Text>
         {/* One line. The subtitles are written to fit; the cap is what stops a
             long one from doubling the row's height and floating the value or
             control off into the middle of nowhere. */}
@@ -125,9 +123,7 @@ export function SettingsRowItem({
         </Text>
       ) : null}
       {control}
-      {onPress ? (
-        <Ionicons name="chevron-forward" size={16} color={palette.textMuted} />
-      ) : null}
+      {onPress ? <Ionicons name="chevron-forward" size={16} color={palette.textMuted} /> : null}
     </>
   );
 

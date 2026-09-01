@@ -191,11 +191,7 @@ function ActionButton({
       accessibilityLabel={label}
       accessibilityHint={hint}
       accessibilityState={{ disabled: Boolean(disabled) }}
-      style={[
-        styles.action,
-        { backgroundColor: toneSurface(tone) },
-        disabled ? styles.disabled : null,
-      ]}
+      style={[styles.action, { backgroundColor: toneSurface(tone) }, disabled ? styles.disabled : null]}
     >
       <Ionicons name={icon} size={16} color={ink} />
       <Text style={[styles.actionText, { color: ink }]}>{label}</Text>
@@ -203,13 +199,7 @@ function ActionButton({
   );
 }
 
-export function EmailCard({
-  email,
-  onPress,
-}: {
-  email: BriefingEmail;
-  onPress?: () => void;
-}) {
+export function EmailCard({ email, onPress }: { email: BriefingEmail; onPress?: () => void }) {
   const styles = useThemedStyles(makeStyles);
   const tone = emailUrgencyTone(email.urgencyScore);
 

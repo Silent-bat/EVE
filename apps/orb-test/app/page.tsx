@@ -16,8 +16,8 @@ export default function Home() {
       <div className="home__head">
         <h1>Orb test</h1>
         <p>
-          WebGL point-sprite recreations of particleorb1 and particleorb2. One draw call each;
-          all motion runs in the vertex shader.
+          WebGL point-sprite recreations of particleorb1 and particleorb2. One draw call each; all motion runs
+          in the vertex shader.
         </p>
       </div>
 

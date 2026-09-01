@@ -63,7 +63,10 @@ function parseArgBlob(blob) {
   const [head, ...rest] = value.split(/\s+[—–]\s+|\s+--\s+/);
   const description = rest.join(" — ").trim();
   const optional = /^optional\b/i.test(head);
-  const cleanedHead = head.replace(/^optional\s+/i, "").trim().toLowerCase();
+  const cleanedHead = head
+    .replace(/^optional\s+/i, "")
+    .trim()
+    .toLowerCase();
   const typeKey = /** @type {keyof typeof TYPE_KEYWORDS} */ (
     Object.keys(TYPE_KEYWORDS).find((k) => cleanedHead.startsWith(k)) || "string"
   );

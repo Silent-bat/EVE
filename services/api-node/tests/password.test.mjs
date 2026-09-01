@@ -1,7 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { hashPassword, hashToken, normalizeEmail, verifyPassword } from "../src/auth/password.mjs";
+import {
+  hashPassword,
+  hashToken,
+  MAX_PASSWORD_CHARS,
+  normalizeEmail,
+  verifyPassword,
+} from "../src/auth/password.mjs";
 
 test("normalizeEmail lowercases and trims", () => {
   assert.equal(normalizeEmail("  Test@Example.COM  "), "test@example.com");
@@ -34,6 +40,12 @@ test("verifyPassword rejects malformed stored hashes without throwing", async ()
   assert.equal(await verifyPassword("any", ""), false);
   assert.equal(await verifyPassword("any", "scrypt:onlyone"), false);
   assert.equal(await verifyPassword("any", "bcrypt:salt:hash"), false);
+});
+
+test("password hashing rejects oversized input before doing scrypt work", async () => {
+  const oversized = "x".repeat(MAX_PASSWORD_CHARS + 1);
+  await assert.rejects(() => hashPassword(oversized), /at most 256/i);
+  assert.equal(await verifyPassword(oversized, "scrypt:salt:hash"), false);
 });
 
 test("hashToken is deterministic and base64url", () => {

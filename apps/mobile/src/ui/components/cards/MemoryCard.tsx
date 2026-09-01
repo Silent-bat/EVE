@@ -86,24 +86,16 @@ export function MemoryCard({
   return (
     <CardShell
       onPress={onEdit}
-      accessibilityLabel={
-        filled ? `${field.label}: ${value}` : `${field.label}, not set. ${field.prompt}`
-      }
+      accessibilityLabel={filled ? `${field.label}: ${value}` : `${field.label}, not set. ${field.prompt}`}
       accessibilityHint={onEdit ? `Edits ${field.label.toLowerCase()}` : undefined}
       style={styles.card}
     >
       <View style={styles.header}>
         <View style={[styles.icon, filled ? { backgroundColor: palette.ambientTint } : null]}>
-          <Ionicons
-            name={field.icon}
-            size={15}
-            color={filled ? palette.ambient : palette.textMuted}
-          />
+          <Ionicons name={field.icon} size={15} color={filled ? palette.ambient : palette.textMuted} />
         </View>
         <Text style={styles.label}>{field.label}</Text>
-        {onEdit ? (
-          <Ionicons name="pencil-outline" size={14} color={palette.textMuted} />
-        ) : null}
+        {onEdit ? <Ionicons name="pencil-outline" size={14} color={palette.textMuted} /> : null}
       </View>
 
       <Text style={filled ? styles.value : styles.prompt} numberOfLines={filled ? 4 : 2}>
@@ -119,13 +111,7 @@ export function MemoryCard({
  * The count is the honest version of a progress bar — "4 of 6" tells someone
  * there's something left to do without pretending the profile has a score.
  */
-export function MemorySummary({
-  profile,
-  onManage,
-}: {
-  profile: UserProfile;
-  onManage?: () => void;
-}) {
+export function MemorySummary({ profile, onManage }: { profile: UserProfile; onManage?: () => void }) {
   const { palette } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const filled = MEMORY_FIELDS.filter((f) => (profile[f.key] ?? "").trim().length > 0).length;

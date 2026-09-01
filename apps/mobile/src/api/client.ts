@@ -1,8 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { config } from "../config";
+import * as SecureStore from "expo-secure-store";
+import { Platform } from "react-native";
+import { assertSecureTransport, config } from "../config";
 
 /**
- * Holds the current auth token in memory + AsyncStorage. Replaces the
+ * Holds the current auth token in memory + the platform secure store. Replaces the
  * module-level mutable variable that lived in App.tsx. A single instance is
  * created at module scope and shared across the app; the `subscribe()` hook
  * lets React state listen for changes.
@@ -10,20 +12,79 @@ import { config } from "../config";
 class TokenStore {
   #token: string | null = null;
   #listeners = new Set<(token: string | null) => void>();
+  /**
+   * Changes the in-memory token synchronously, before the platform store
+   * operation starts. Hydration and older async writes can then tell whether
+   * their result is still allowed to become authoritative.
+   */
+  #mutationVersion = 0;
+  /** Keep SecureStore and the legacy migration operations in call order. */
+  #storageQueue: Promise<void> = Promise.resolve();
+
+  #enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.#storageQueue.then(operation, operation);
+    // A failed operation must not strand every later token operation behind a
+    // rejected promise. The caller still receives the original failure.
+    this.#storageQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
 
   /**
-   * Hydrate from AsyncStorage. Resolves with the loaded token (or null) so
+   * Hydrate from SecureStore. Resolves with the loaded token (or null) so
    * the caller can use it to decide initial UI state.
    */
   async hydrate(): Promise<string | null> {
-    try {
-      const stored = await AsyncStorage.getItem(config.auth.storageKey);
-      this.#token = stored ?? null;
-    } catch {
-      this.#token = null;
+    // expo-secure-store has no browser implementation. Keep browser sessions
+    // memory-only instead of falling back to localStorage, where an XSS can
+    // read a long-lived bearer credential. A future web auth flow can replace
+    // this with an HttpOnly cookie or another server-managed session.
+    if (Platform.OS === "web") {
+      this.#emit();
+      return this.#token;
     }
-    this.#emit();
-    return this.#token;
+    const version = this.#mutationVersion;
+    return this.#enqueue(async () => {
+      // A login/logout may have happened while an earlier hydrate was queued.
+      // Do not even read stale storage in that case.
+      if (version !== this.#mutationVersion) return this.#token;
+
+      try {
+        const stored = await SecureStore.getItemAsync(config.auth.storageKey);
+        if (version !== this.#mutationVersion) return this.#token;
+        this.#token = stored || null;
+
+        // Migrate tokens written by versions before SecureStore was installed.
+        // Read once, move into the keystore, and remove the plaintext copy even
+        // when the secure-store write fails so it cannot linger indefinitely.
+        if (!this.#token) {
+          const legacy = await AsyncStorage.getItem(config.auth.storageKey);
+          if (version !== this.#mutationVersion) return this.#token;
+          if (legacy) {
+            try {
+              await SecureStore.setItemAsync(config.auth.storageKey, legacy, {
+                keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+              });
+              if (version !== this.#mutationVersion) return this.#token;
+              this.#token = legacy;
+            } finally {
+              // The legacy value is no longer needed after this attempt. Keep
+              // removing it even when the secure write fails so plaintext
+              // credentials do not linger indefinitely.
+              await AsyncStorage.removeItem(config.auth.storageKey).catch(() => undefined);
+            }
+          }
+        }
+      } catch {
+        if (version !== this.#mutationVersion) return this.#token;
+        this.#token = null;
+      }
+      if (version !== this.#mutationVersion) return this.#token;
+      this.#emit();
+      return this.#token;
+    });
   }
 
   get current(): string | null {
@@ -31,19 +92,43 @@ class TokenStore {
   }
 
   async set(token: string): Promise<void> {
+    const version = ++this.#mutationVersion;
     this.#token = token;
-    await AsyncStorage.setItem(config.auth.storageKey, token);
-    this.#emit();
+    if (Platform.OS === "web") {
+      this.#emit();
+      return;
+    }
+    await this.#enqueue(async () => {
+      await SecureStore.setItemAsync(config.auth.storageKey, token, {
+        keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+      });
+      // Remove a value left by a pre-SecureStore build. This is harmless for a
+      // newer token and prevents a later migration from seeing stale data.
+      await AsyncStorage.removeItem(config.auth.storageKey).catch(() => undefined);
+    });
+    if (version === this.#mutationVersion) this.#emit();
   }
 
   async clear(): Promise<void> {
+    const version = ++this.#mutationVersion;
     this.#token = null;
-    try {
-      await AsyncStorage.removeItem(config.auth.storageKey);
-    } catch {
-      // best-effort
+    if (Platform.OS === "web") {
+      // Remove a token left by a pre-SecureStore browser build, but never
+      // write a new bearer token to browser storage.
+      await AsyncStorage.removeItem(config.auth.storageKey).catch(() => undefined);
+      if (version === this.#mutationVersion) this.#emit();
+      return;
     }
-    this.#emit();
+    await this.#enqueue(async () => {
+      try {
+        await SecureStore.deleteItemAsync(config.auth.storageKey);
+        // Also remove a legacy value if an older build left one behind.
+        await AsyncStorage.removeItem(config.auth.storageKey);
+      } catch {
+        // best-effort
+      }
+    });
+    if (version === this.#mutationVersion) this.#emit();
   }
 
   subscribe(listener: (token: string | null) => void): () => void {
@@ -78,6 +163,7 @@ export async function apiFetch<T>(
   init: RequestInit = {},
   token: string | null = tokenStore.current,
 ): Promise<T> {
+  assertSecureTransport(config.apiBaseURL);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.auth.apiTimeoutMs);
 

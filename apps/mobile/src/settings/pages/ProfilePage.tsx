@@ -66,7 +66,7 @@ const GROUPS: GroupSpec[] = [
         key: "keyRelationships",
         label: "Key people",
         placeholder: "Who you can't miss",
-        hint: "Names, and why they matter — \"Sarah, lead investor\". Their mail jumps the queue.",
+        hint: 'Names, and why they matter — "Sarah, lead investor". Their mail jumps the queue.',
         multiline: true,
       },
     ],

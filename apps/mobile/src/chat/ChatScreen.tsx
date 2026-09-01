@@ -8,35 +8,29 @@
  * concrete openers drawn from the real capabilities the backend exposes, so the
  * first message doesn't have to be a guess about what EVE can do.
  *
- * History is in-memory by design: this is a scratchpad for asking about today,
- * not a transcript to mine. The voice screen owns the persistent conversation.
+ * Conversations are stored per user on the device. The compact history view is
+ * also the navigator: it keeps the main Messages destination useful without
+ * bringing a second navigation library into a four-screen app.
  */
 import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useRef, useState } from "react";
-import {
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { askAssistant } from "../assistant/api";
-import {
-  AIAvatar,
-  BOTTOM_NAV_CLEARANCE,
-  ChatBubble,
-  EmptyState,
-  describeError,
-} from "../ui/components";
+import { AIAvatar, BOTTOM_NAV_CLEARANCE, ChatBubble, EmptyState, describeError } from "../ui/components";
 import { gradientsFor, withAlpha } from "../ui/gradient";
 import { FadeSlideIn, PressableScale } from "../ui/motion";
 import { elevation, HIT_SLOP, MIN_TOUCH, radius, spacing } from "../ui/theme";
 import { useTheme, useThemedStyles, type ThemeValue } from "../ui/ThemeContext";
 import { describeAction } from "../utils/formatters";
 import type { AssistantAnswer } from "../types";
+import {
+  conversationTitle,
+  readChatHistory,
+  writeChatHistory,
+  type ChatConversation,
+  type ChatTurn,
+} from "./history";
 
 /**
  * Openers. Each maps to a capability the API genuinely has, so none of them
@@ -49,101 +43,321 @@ const OPENERS = [
   "Pull anything new from Gmail",
 ] as const;
 
-type Turn = {
-  id: string;
-  prompt: string;
-  /** null while in flight. */
-  answer: AssistantAnswer | null;
-  error: string | null;
-};
-
-export function ChatScreen() {
+export function ChatScreen({ userID }: { userID: string }) {
   const { palette } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [draft, setDraft] = useState("");
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const [conversations, setConversations] = useState<ChatConversation[]>([]);
+  const [activeID, setActiveID] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const [busy, setBusy] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const seq = useRef(0);
 
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeID) ?? null,
+    [activeID, conversations],
+  );
+  const turns = activeConversation?.turns ?? [];
+
+  useEffect(() => {
+    let active = true;
+    setHydrated(false);
+    setActiveID(null);
+    setConversations([]);
+
+    void readChatHistory(userID).then((stored) => {
+      if (!active) return;
+      setConversations(stored);
+      setActiveID(stored[0]?.id ?? null);
+      setHydrated(true);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [userID]);
+
+  useEffect(() => {
+    if (hydrated) void writeChatHistory(userID, conversations);
+  }, [conversations, hydrated, userID]);
+
+  const updateConversation = useCallback(
+    (conversationID: string, update: (conversation: ChatConversation) => ChatConversation) => {
+      setConversations((current) =>
+        current
+          .map((conversation) => (conversation.id === conversationID ? update(conversation) : conversation))
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+      );
+    },
+    [],
+  );
+
   const send = useCallback(
     async (text: string) => {
       const prompt = text.trim();
-      if (!prompt || busy) return;
+      if (!prompt || busy || !hydrated) return;
 
       seq.current += 1;
-      const id = `t${seq.current}`;
-      setTurns((prev) => [...prev, { id, prompt, answer: null, error: null }]);
+      const now = new Date().toISOString();
+      const conversationID = activeID ?? `c-${Date.now()}-${seq.current}`;
+      const turnID = `t-${Date.now()}-${seq.current}`;
+      const turn: ChatTurn = {
+        id: turnID,
+        prompt,
+        answer: null,
+        error: null,
+        createdAt: now,
+      };
+
+      if (activeID) {
+        updateConversation(conversationID, (conversation) => ({
+          ...conversation,
+          updatedAt: now,
+          turns: [...conversation.turns, turn],
+        }));
+      } else {
+        setConversations((current) => [
+          {
+            id: conversationID,
+            title: conversationTitle(prompt),
+            createdAt: now,
+            updatedAt: now,
+            turns: [turn],
+          },
+          ...current,
+        ]);
+        setActiveID(conversationID);
+      }
+
       setDraft("");
       setBusy(true);
 
       try {
         const answer = await askAssistant(prompt);
-        setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, answer } : t)));
+        updateConversation(conversationID, (conversation) => ({
+          ...conversation,
+          updatedAt: new Date().toISOString(),
+          turns: conversation.turns.map((item) => (item.id === turnID ? { ...item, answer } : item)),
+        }));
       } catch (error) {
-        setTurns((prev) =>
-          prev.map((t) => (t.id === id ? { ...t, error: describeError(error) } : t)),
-        );
+        updateConversation(conversationID, (conversation) => ({
+          ...conversation,
+          updatedAt: new Date().toISOString(),
+          turns: conversation.turns.map((item) =>
+            item.id === turnID ? { ...item, error: describeError(error) } : item,
+          ),
+        }));
       } finally {
         setBusy(false);
       }
     },
-    [busy],
+    [activeID, busy, hydrated, updateConversation],
+  );
+
+  const newConversation = useCallback(() => {
+    if (busy) return;
+    setActiveID(null);
+    setDraft("");
+    setShowHistory(false);
+  }, [busy]);
+
+  const removeConversation = useCallback(
+    (conversationID: string) => {
+      if (busy && conversationID === activeID) return;
+      setConversations((current) => current.filter((item) => item.id !== conversationID));
+      if (conversationID === activeID) setActiveID(null);
+    },
+    [activeID, busy],
   );
 
   return (
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-    >
-      <ScrollView
-        ref={scrollRef}
-        contentContainerStyle={styles.scroll}
-        keyboardShouldPersistTaps="handled"
-        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
-      >
-        {turns.length === 0 ? (
-          <View style={styles.intro}>
-            <EmptyState
-              icon="chatbubbles-outline"
-              title="Ask EVE anything"
-              body="She can see your mail, your meetings, and what she's already drafted for you."
-            />
-            <View style={styles.openers}>
-              {OPENERS.map((opener) => (
-                <PressableScale
-                  key={opener}
-                  onPress={() => void send(opener)}
-                  hitSlop={HIT_SLOP}
-                  accessibilityRole="button"
-                  accessibilityLabel={opener}
-                  style={styles.opener}
-                >
-                  <Text style={styles.openerText}>{opener}</Text>
-                  <Ionicons name="arrow-forward" size={13} color={palette.ambient} />
-                </PressableScale>
-              ))}
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <View style={styles.chatNav}>
+        <PressableScale
+          onPress={() => setShowHistory((current) => !current)}
+          hitSlop={HIT_SLOP}
+          accessibilityRole="button"
+          accessibilityLabel={showHistory ? "Return to conversation" : "Open message history"}
+          style={[styles.navButton, showHistory ? styles.navButtonActive : null]}
+        >
+          <Ionicons
+            name={showHistory ? "chatbubble" : "time-outline"}
+            size={20}
+            color={showHistory ? palette.textInverse : palette.text}
+          />
+        </PressableScale>
+        <View style={styles.navTitleWrap}>
+          <Text style={styles.navTitle}>
+            {showHistory ? "History" : (activeConversation?.title ?? "Messages")}
+          </Text>
+          {!showHistory && turns.length > 0 ? (
+            <Text style={styles.navMeta}>
+              {turns.length} {turns.length === 1 ? "message" : "messages"}
+            </Text>
+          ) : null}
+        </View>
+        <PressableScale
+          onPress={newConversation}
+          disabled={busy}
+          hitSlop={HIT_SLOP}
+          accessibilityRole="button"
+          accessibilityLabel="New conversation"
+          accessibilityState={{ disabled: busy }}
+          style={styles.navButton}
+        >
+          <Ionicons name="create-outline" size={21} color={busy ? palette.textMuted : palette.text} />
+        </PressableScale>
+      </View>
+
+      {showHistory ? (
+        <HistoryNavigator
+          conversations={conversations}
+          activeID={activeID}
+          onSelect={(conversationID) => {
+            setActiveID(conversationID);
+            setShowHistory(false);
+          }}
+          onDelete={removeConversation}
+        />
+      ) : (
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+        >
+          {turns.length === 0 ? (
+            <View style={styles.intro}>
+              <EmptyState
+                icon="chatbubbles-outline"
+                title="Ask EVE anything"
+                body="She can see your mail, your meetings, and what she's already drafted for you."
+              />
+              <View style={styles.openers}>
+                {OPENERS.map((opener) => (
+                  <PressableScale
+                    key={opener}
+                    onPress={() => void send(opener)}
+                    hitSlop={HIT_SLOP}
+                    accessibilityRole="button"
+                    accessibilityLabel={opener}
+                    style={styles.opener}
+                  >
+                    <Text style={styles.openerText}>{opener}</Text>
+                    <Ionicons name="arrow-forward" size={13} color={palette.ambient} />
+                  </PressableScale>
+                ))}
+              </View>
             </View>
-          </View>
-        ) : null}
+          ) : null}
 
-        {turns.map((turn) => (
-          <View key={turn.id} style={styles.turn}>
-            <ChatBubble author="user" text={turn.prompt} />
-            {turn.error ? (
-              <ChatBubble author="eve" text={turn.error} />
-            ) : turn.answer ? (
-              <AnswerBlock answer={turn.answer} />
-            ) : (
-              <ChatBubble author="eve" pending />
-            )}
-          </View>
-        ))}
-      </ScrollView>
+          {turns.map((turn) => (
+            <View key={turn.id} style={styles.turn}>
+              <ChatBubble author="user" text={turn.prompt} timestamp={formatTurnTime(turn.createdAt)} />
+              {turn.error ? (
+                <ChatBubble author="eve" text={turn.error} />
+              ) : turn.answer ? (
+                <AnswerBlock answer={turn.answer} />
+              ) : (
+                <ChatBubble author="eve" pending />
+              )}
+            </View>
+          ))}
+        </ScrollView>
+      )}
 
-      <Composer value={draft} onChange={setDraft} onSend={() => void send(draft)} busy={busy} />
+      {!showHistory ? (
+        <Composer
+          value={draft}
+          onChange={setDraft}
+          onSend={() => void send(draft)}
+          busy={busy || !hydrated}
+        />
+      ) : null}
     </KeyboardAvoidingView>
   );
+}
+
+function HistoryNavigator({
+  conversations,
+  activeID,
+  onSelect,
+  onDelete,
+}: {
+  conversations: ChatConversation[];
+  activeID: string | null;
+  onSelect: (conversationID: string) => void;
+  onDelete: (conversationID: string) => void;
+}) {
+  const { palette } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+
+  return (
+    <ScrollView contentContainerStyle={styles.history}>
+      {conversations.length === 0 ? (
+        <EmptyState
+          icon="time-outline"
+          title="No message history"
+          body="Your conversations will appear here."
+        />
+      ) : (
+        conversations.map((conversation) => {
+          const lastTurn = conversation.turns[conversation.turns.length - 1];
+          const preview = lastTurn?.answer?.answer ?? lastTurn?.error ?? lastTurn?.prompt ?? "";
+          const selected = conversation.id === activeID;
+
+          return (
+            <View
+              key={conversation.id}
+              style={[styles.historyRow, selected ? styles.historyRowActive : null]}
+            >
+              <PressableScale
+                onPress={() => onSelect(conversation.id)}
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${conversation.title}`}
+                style={styles.historyMain}
+              >
+                <View style={styles.historyCopy}>
+                  <Text numberOfLines={1} style={styles.historyTitle}>
+                    {conversation.title}
+                  </Text>
+                  <Text numberOfLines={1} style={styles.historyPreview}>
+                    {preview}
+                  </Text>
+                </View>
+                <Text style={styles.historyDate}>{formatHistoryDate(conversation.updatedAt)}</Text>
+              </PressableScale>
+              <PressableScale
+                onPress={() => onDelete(conversation.id)}
+                hitSlop={HIT_SLOP}
+                accessibilityRole="button"
+                accessibilityLabel={`Delete ${conversation.title}`}
+                style={styles.deleteButton}
+              >
+                <Ionicons name="trash-outline" size={18} color={palette.textMuted} />
+              </PressableScale>
+            </View>
+          );
+        })
+      )}
+    </ScrollView>
+  );
+}
+
+function formatTurnTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatHistoryDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) return formatTurnTime(value);
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 /**
@@ -226,10 +440,7 @@ function Composer({
           accessibilityRole="button"
           accessibilityLabel={busy ? "Sending" : "Send"}
           accessibilityState={{ disabled: inert, busy }}
-          style={[
-            styles.send,
-            { backgroundColor: inert ? palette.surfaceAlt : sendInk },
-          ]}
+          style={[styles.send, { backgroundColor: inert ? palette.surfaceAlt : sendInk }]}
         >
           <Ionicons
             name={busy ? "ellipsis-horizontal" : "arrow-up"}
@@ -245,6 +456,30 @@ function Composer({
 function makeStyles({ palette, type }: ThemeValue) {
   return StyleSheet.create({
     flex: { flex: 1 },
+    chatNav: {
+      minHeight: 62,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.md,
+      paddingHorizontal: spacing.lg,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: palette.border,
+      backgroundColor: palette.background,
+    },
+    navButton: {
+      width: MIN_TOUCH,
+      height: MIN_TOUCH,
+      borderRadius: radius.pill,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: 1,
+      borderColor: palette.border,
+      backgroundColor: palette.surface,
+    },
+    navButtonActive: { backgroundColor: palette.text, borderColor: palette.text },
+    navTitleWrap: { flex: 1, minWidth: 0 },
+    navTitle: { ...type.title, fontSize: 16 },
+    navMeta: { ...type.caption, marginTop: 2 },
     scroll: {
       padding: spacing.lg,
       paddingBottom: spacing.xl,
@@ -291,6 +526,43 @@ function makeStyles({ palette, type }: ThemeValue) {
     outcomeBody: { ...type.caption },
     sourceRow: { flexDirection: "row", alignItems: "center", gap: 4 },
     sourceText: { ...type.caption, fontSize: 11 },
+    history: {
+      padding: spacing.lg,
+      paddingBottom: BOTTOM_NAV_CLEARANCE,
+      gap: spacing.sm,
+      flexGrow: 1,
+    },
+    historyRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      minHeight: 72,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: palette.border,
+      backgroundColor: palette.surface,
+    },
+    historyRowActive: { borderColor: palette.borderStrong, backgroundColor: palette.surfaceMuted },
+    historyMain: {
+      flex: 1,
+      minWidth: 0,
+      minHeight: 70,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.md,
+      paddingLeft: spacing.lg,
+      paddingVertical: spacing.md,
+    },
+    historyCopy: { flex: 1, minWidth: 0, gap: 4 },
+    historyTitle: { ...type.label, fontSize: 14 },
+    historyPreview: { ...type.bodyMuted, fontSize: 13 },
+    historyDate: { ...type.caption },
+    deleteButton: {
+      width: MIN_TOUCH,
+      height: MIN_TOUCH,
+      alignItems: "center",
+      justifyContent: "center",
+      marginHorizontal: spacing.xs,
+    },
     composerWrap: {
       paddingHorizontal: spacing.lg,
       paddingTop: spacing.sm,

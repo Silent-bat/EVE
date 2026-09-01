@@ -16,9 +16,9 @@
  *   - Memory + briefing context live in the session-setup system prompt
  *   - Transcript renders live as the model speaks
  *
- * This is hands-free turn taking rather than full duplex: the microphone is
- * open while EVE is idle, closes while she thinks or speaks, then re-arms.
- * That prevents her loudspeaker output from becoming the next user turn.
+ * This is hands-free turn taking rather than a raw full-duplex PCM stream: the
+ * microphone stays armed while EVE speaks, with a stricter foreground gate so
+ * the user can interrupt her without turning speaker bleed into a new turn.
  *
  * The stage is a `ParticleField` rather than a solid orb: a cloud of motes can
  * look agitated, which is what reads as a voice, where a sphere can only get
@@ -28,14 +28,7 @@
  */
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ChatBubble, ParticleField, TopNav, Waveform, type FieldState } from "../ui/components";
@@ -69,7 +62,8 @@ export function VoiceScreen({ visible, onClose }: Props) {
   const live = useGeminiLive({
     enabled: visible,
     onError: (msg) => setErrorMessage(msg),
-    onAudioResponse: speaker.play,
+    onAudioChunk: speaker.pushChunk,
+    onAudioComplete: speaker.finish,
   });
 
   const onUtterance = useCallback(
@@ -96,14 +90,27 @@ export function VoiceScreen({ visible, onClose }: Props) {
     [live],
   );
 
-  // The mic owns the idle gap only. It closes before transcription begins and
-  // stays closed until EVE's audio has completely finished playing.
-  const readyToListen =
-    visible && !paused && live.status === "idle" && !speaker.busy && !sending;
+  const onSpeechStart = useCallback(() => {
+    // Stop playback as soon as foreground speech is established. The recorder
+    // keeps a short pre-roll, so the user's first syllable is still included;
+    // the Live bridge receives an interruption marker before the transcript.
+    if (speaker.busy) {
+      speaker.stop();
+      live.interrupt();
+    }
+  }, [live, speaker]);
+
+  // Keep the microphone armed while EVE is speaking so a user can barge in.
+  // The recorder uses Android's voice-communication source (hardware AEC) and
+  // the detector tightens its gate during playback to suppress speaker bleed.
+  const readyToListen = visible && !paused && live.status !== "connecting" && live.status !== "error";
   const listen = useAlwaysListening({
     active: readyToListen,
     onUtterance,
     onError: setErrorMessage,
+    onSpeechStart,
+    speakerBusy: speaker.busy,
+    speakerLevel: speaker.level,
   });
 
   const status: Status = deriveStatus({
@@ -164,17 +171,10 @@ export function VoiceScreen({ visible, onClose }: Props) {
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
-        <TopNav
-          title="Voice"
-          onBack={onClose}
-          backIcon="close"
-          backLabel="End voice session"
-        />
+        <TopNav title="Voice" onBack={onClose} backIcon="close" backLabel="End voice session" />
 
         <View style={styles.stage}>
-          {/* Whichever of the two is making sound. The recorder is stopped for
-              the whole of EVE's turn, so its level is flat zero while she talks;
-              the speaker measures its own output instead. */}
+          {/* Show the envelope of whichever side is currently making sound. */}
           <ParticleField
             state={fieldState(status)}
             level={status === "speaking" ? speaker.level : listen.level}
@@ -195,8 +195,7 @@ export function VoiceScreen({ visible, onClose }: Props) {
               </Text>
             ) : (
               <Text style={styles.prompt}>
-                Just speak. EVE detects when you start and stop talking, answers aloud,
-                then listens again.
+                Just speak. EVE detects when you start and stop talking, answers aloud, then listens again.
               </Text>
             )}
           </View>
@@ -204,9 +203,7 @@ export function VoiceScreen({ visible, onClose }: Props) {
           {/* Reserved whether or not the waveform is showing, for the same
               reason — it only appears while listening. */}
           <View style={styles.waveSlot}>
-            {status === "listening" ? (
-              <Waveform level={listen.level} active />
-            ) : null}
+            {status === "listening" ? <Waveform level={listen.level} active /> : null}
           </View>
         </View>
 
@@ -217,11 +214,7 @@ export function VoiceScreen({ visible, onClose }: Props) {
           showsVerticalScrollIndicator={false}
         >
           {history.map((turn) => (
-            <ChatBubble
-              key={turn.id}
-              author={turn.role === "user" ? "user" : "eve"}
-              text={turn.text}
-            />
+            <ChatBubble key={turn.id} author={turn.role === "user" ? "user" : "eve"} text={turn.text} />
           ))}
         </ScrollView>
 
@@ -233,12 +226,7 @@ export function VoiceScreen({ visible, onClose }: Props) {
         ) : null}
 
         <View style={styles.controls}>
-          <MicButton
-            status={status}
-            palette={palette}
-            paused={paused}
-            onTogglePause={togglePause}
-          />
+          <MicButton status={status} palette={palette} paused={paused} onTogglePause={togglePause} />
           <Text style={styles.controlsHint}>{controlHint(status, paused)}</Text>
         </View>
       </SafeAreaView>
@@ -359,8 +347,7 @@ function controlHint(status: Status, paused: boolean): string {
 
 function statusColor(palette: ThemeValue["palette"], status: Status): string {
   if (status === "listening") return palette.danger;
-  if (status === "thinking" || status === "encoding" || status === "connecting")
-    return palette.warning;
+  if (status === "thinking" || status === "encoding" || status === "connecting") return palette.warning;
   if (status === "speaking") return palette.ambient;
   if (status === "error") return palette.danger;
   return palette.success;

@@ -160,11 +160,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
         </View>
 
         {expandable ? (
-          <Ionicons
-            name={open ? "chevron-up" : "chevron-down"}
-            size={16}
-            color={palette.textMuted}
-          />
+          <Ionicons name={open ? "chevron-up" : "chevron-down"} size={16} color={palette.textMuted} />
         ) : null}
       </View>
 
@@ -313,7 +309,12 @@ function makeStyles({ palette, type }: ThemeValue) {
       justifyContent: "center",
     },
     body: { flex: 1, gap: 2 },
-    titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm },
+    titleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: spacing.sm,
+    },
     title: { ...type.label },
     subject: { ...type.body },
     note: { ...type.caption, fontSize: 12 },
@@ -330,4 +331,3 @@ function makeStyles({ palette, type }: ThemeValue) {
     draftBody: { ...type.body, color: palette.text },
   });
 }
-

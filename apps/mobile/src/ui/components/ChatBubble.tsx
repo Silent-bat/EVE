@@ -65,9 +65,7 @@ export function ChatBubble({
           {footer ? <View style={styles.footer}>{footer}</View> : null}
         </View>
         {timestamp ? (
-          <Text style={[styles.timestamp, fromEve ? null : styles.timestampRight]}>
-            {timestamp}
-          </Text>
+          <Text style={[styles.timestamp, fromEve ? null : styles.timestampRight]}>{timestamp}</Text>
         ) : null}
       </View>
     </FadeSlideIn>
@@ -122,10 +120,7 @@ export function VoiceMessage({
             {[0.4, 0.75, 0.5, 1, 0.6, 0.85, 0.45].map((weight, i) => (
               <View
                 key={i}
-                style={[
-                  styles.voiceBar,
-                  { height: 18 * weight, backgroundColor: withAlpha(tint, 0.65) },
-                ]}
+                style={[styles.voiceBar, { height: 18 * weight, backgroundColor: withAlpha(tint, 0.65) }]}
               />
             ))}
           </View>

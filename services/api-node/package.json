@@ -6,8 +6,8 @@
   "main": "server.mjs",
   "scripts": {
     "start": "node --env-file=../../.env server.mjs",
-    "start:prod": "NODE_ENV=production node server.mjs",
-    "test": "node --env-file=tests/.env.test --test --test-reporter=spec 'tests/*.test.mjs'",
+    "start:prod": "NODE_ENV=production node --env-file-if-exists=../../.env server.mjs",
+    "test": "node --env-file-if-exists=tests/.env.test --test --test-reporter=spec 'tests/*.test.mjs'",
     "typecheck": "tsc --noEmit -p jsconfig.json"
   },
   "dependencies": {

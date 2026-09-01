@@ -125,15 +125,7 @@ export function BottomNav({
   );
 }
 
-function NavItem({
-  tab,
-  active,
-  onPress,
-}: {
-  tab: NavTab;
-  active: boolean;
-  onPress: () => void;
-}) {
+function NavItem({ tab, active, onPress }: { tab: NavTab; active: boolean; onPress: () => void }) {
   const { palette } = useTheme();
   const styles = useThemedStyles(makeStyles);
 
@@ -156,10 +148,7 @@ function NavItem({
       </View>
       {/* Labels are back. A full-width bar has room for them, and four
           icon-only glyphs asked the user to remember what a newspaper means. */}
-      <Text
-        numberOfLines={1}
-        style={[styles.label, active ? { color: palette.ambient } : null]}
-      >
+      <Text numberOfLines={1} style={[styles.label, active ? { color: palette.ambient } : null]}>
         {tab.label}
       </Text>
     </PressableScale>

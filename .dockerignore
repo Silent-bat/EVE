@@ -22,7 +22,9 @@ README.md
 CHANGELOG.md
 docker-compose.yml
 apps/preview
-apps/mobile
+# The workspace manifest is needed by pnpm's filtered install. Android/iOS
+# build trees remain excluded above, so this does not pull native artifacts
+# into the API image context.
 briefos_final_prd.html
 tests
 **/tests

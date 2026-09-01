@@ -204,10 +204,7 @@ export function ProactiveCategoryPage({
 
       {cat.enabled ? (
         <>
-          <SettingsGroup
-            title="How urgent, at least"
-            footer={thresholdHint(cat.threshold)}
-          >
+          <SettingsGroup title="How urgent, at least" footer={thresholdHint(cat.threshold)}>
             <View style={styles.controlRow}>
               <Segmented
                 tone="ambient"
@@ -233,8 +230,7 @@ export function ProactiveCategoryPage({
         </>
       ) : (
         <Text style={styles.offNote}>
-          {meta.label} thoughts still collect on Today. Turn this on to have EVE bring them
-          to you.
+          {meta.label} thoughts still collect on Today. Turn this on to have EVE bring them to you.
         </Text>
       )}
     </SettingsPage>

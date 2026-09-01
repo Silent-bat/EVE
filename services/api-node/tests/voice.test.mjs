@@ -10,11 +10,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  transcribeAudio,
-  __setFetch,
-  __setGemini,
-} from "../src/voice/index.mjs";
+import { transcribeAudio, __setFetch, __setGemini } from "../src/voice/index.mjs";
 
 const TINY_AUDIO_B64 = "AAAA"; // 4 chars — irrelevant content, fetch is mocked
 
@@ -35,6 +31,7 @@ function mockGeminiOK(text = "hello world") {
   });
 }
 
+/** @param {unknown} verdict */
 function mockGeminiVerdict(verdict) {
   mockGeminiOK(JSON.stringify(verdict));
 }
@@ -49,40 +46,34 @@ test("transcribeAudio returns 503 when GEMINI_API_KEY is not configured", async 
   if (config.gemini) {
     return; // env has a key; the 503 path is unreachable
   }
-  await assert.rejects(
-    () => transcribeAudio({ audioBase64: TINY_AUDIO_B64, mimeType: "audio/mp4" }),
-    { status: 503 },
-  );
+  await assert.rejects(() => transcribeAudio({ audioBase64: TINY_AUDIO_B64, mimeType: "audio/mp4" }), {
+    status: 503,
+  });
 });
 
 test("transcribeAudio rejects empty audio", async () => {
   __setGemini({ apiKey: "test-key" });
-  await assert.rejects(
-    () => transcribeAudio({ audioBase64: "", mimeType: "audio/mp4" }),
-    { status: 400 },
-  );
+  await assert.rejects(() => transcribeAudio({ audioBase64: "", mimeType: "audio/mp4" }), { status: 400 });
 });
 
 test("transcribeAudio rejects oversized audio (413)", async () => {
   __setGemini({ apiKey: "test-key" });
   const oversize = "A".repeat(1_500_001);
-  await assert.rejects(
-    () => transcribeAudio({ audioBase64: oversize, mimeType: "audio/mp4" }),
-    { status: 413 },
-  );
+  await assert.rejects(() => transcribeAudio({ audioBase64: oversize, mimeType: "audio/mp4" }), {
+    status: 413,
+  });
 });
 
 test("transcribeAudio rejects unsupported mime type (415)", async () => {
   __setGemini({ apiKey: "test-key" });
-  await assert.rejects(
-    () => transcribeAudio({ audioBase64: TINY_AUDIO_B64, mimeType: "video/mp4" }),
-    { status: 415 },
-  );
+  await assert.rejects(() => transcribeAudio({ audioBase64: TINY_AUDIO_B64, mimeType: "video/mp4" }), {
+    status: 415,
+  });
 });
 
 test("transcribeAudio normalizes ';codecs=...' suffix on mime type", async () => {
   __setGemini({ apiKey: "test-key" });
-  mockGeminiOK("ok");
+  mockGeminiVerdict({ accepted: true, text: "ok", reason: "clear_foreground_speech" });
   const result = await transcribeAudio({
     audioBase64: TINY_AUDIO_B64,
     mimeType: "audio/mp4;codecs=mp4a.40.2",
@@ -93,7 +84,7 @@ test("transcribeAudio normalizes ';codecs=...' suffix on mime type", async () =>
 
 test("transcribeAudio returns trimmed transcript on success", async () => {
   __setGemini({ apiKey: "test-key" });
-  mockGeminiOK("  Hello world  \n");
+  mockGeminiVerdict({ accepted: true, text: "  Hello world  \n", reason: "clear_foreground_speech" });
   const result = await transcribeAudio({
     audioBase64: TINY_AUDIO_B64,
     mimeType: "audio/mp4",
@@ -103,6 +94,39 @@ test("transcribeAudio returns trimmed transcript on success", async () => {
   assert.equal(result.rejectionReason, null);
   assert.ok(result.durationMs >= 0);
   assert.ok(result.model.length > 0);
+});
+
+test("transcribeAudio keeps the Gemini API key out of the request URL", async () => {
+  __setGemini({ apiKey: "secret-test-key" });
+  let requestURL = "";
+  /** @type {any} */
+  let requestInit = null;
+  __setFetch(async (url, init) => {
+    requestURL = String(url);
+    requestInit = init;
+    return /** @type {any} */ ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({ accepted: true, text: "hello", reason: "clear_foreground_speech" }),
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+  });
+
+  await transcribeAudio({ audioBase64: TINY_AUDIO_B64, mimeType: "audio/mp4" });
+  assert.equal(requestURL.includes("secret-test-key"), false);
+  assert.equal(requestURL.includes("?key="), false);
+  assert.equal(requestInit?.headers?.["x-goog-api-key"], "secret-test-key");
 });
 
 test("transcribeAudio returns empty string for silent audio (model returns nothing)", async () => {
@@ -177,12 +201,13 @@ test("transcribeAudio rejects malformed JSON-like verdicts", async () => {
 
 test("transcribeAudio surfaces a 502 when Gemini returns a non-OK response", async () => {
   __setGemini({ apiKey: "test-key" });
-  __setFetch(async () =>
-    /** @type {any} */ ({
-      ok: false,
-      status: 400,
-      json: async () => ({ error: { message: "audio too short" } }),
-    }),
+  __setFetch(
+    async () =>
+      /** @type {any} */ ({
+        ok: false,
+        status: 400,
+        json: async () => ({ error: { message: "audio too short" } }),
+      }),
   );
   await assert.rejects(
     () =>
@@ -211,14 +236,15 @@ test("transcribeAudio surfaces a 502 when the fetch transport throws", async () 
 
 test("transcribeAudio surfaces a 502 when Gemini returns invalid JSON", async () => {
   __setGemini({ apiKey: "test-key" });
-  __setFetch(async () =>
-    /** @type {any} */ ({
-      ok: true,
-      status: 200,
-      json: async () => {
-        throw new Error("not json");
-      },
-    }),
+  __setFetch(
+    async () =>
+      /** @type {any} */ ({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new Error("not json");
+        },
+      }),
   );
   await assert.rejects(
     () =>
@@ -228,4 +254,12 @@ test("transcribeAudio surfaces a 502 when Gemini returns invalid JSON", async ()
       }),
     { status: 502 },
   );
+});
+
+test("transcribeAudio rejects a non-JSON model verdict", async () => {
+  __setGemini({ apiKey: "test-key" });
+  mockGeminiOK("hello world");
+  const result = await transcribeAudio({ audioBase64: TINY_AUDIO_B64, mimeType: "audio/mp4" });
+  assert.equal(result.accepted, false);
+  assert.equal(result.rejectionReason, "unintelligible");
 });

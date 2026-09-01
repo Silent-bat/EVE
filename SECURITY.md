@@ -94,6 +94,6 @@ The API config (`services/api-node/src/config.mjs`) reads from `process.env` onl
 ## Defense in depth (not yet in place)
 
 - No CSRF tokens on state-changing endpoints (the API is JSON-only and uses bearer auth, so CSRF is moot for cross-origin attacks via cookies — but if you ever add cookie auth, add CSRF tokens).
-- No request body size limit (untrusted clients can send arbitrarily large payloads). For production, put the API behind a reverse proxy (nginx, Caddy) with a body size cap.
+- JSON request bodies are capped at `MAX_BODY_BYTES` (1 MiB by default) and oversized bodies receive `413`; keep a reverse-proxy cap as defense in depth.
 - No DDoS mitigation. The in-process rate-limiter only covers auth endpoints. For production, put the API behind Cloudflare or your provider's edge.
 - The Gemini and Google APIs are called over plain `fetch` without retries or circuit breakers. A transient outage will surface as a 500 to the user.

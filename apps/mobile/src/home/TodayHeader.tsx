@@ -70,16 +70,12 @@ export function TodayHeader({
             hitSlop={HIT_SLOP}
             accessibilityRole="button"
             accessibilityLabel={
-              alertCount > 0
-                ? `Notifications, ${alertCount} new`
-                : "Notifications, nothing new"
+              alertCount > 0 ? `Notifications, ${alertCount} new` : "Notifications, nothing new"
             }
             style={styles.bell}
           >
             <Ionicons name="notifications-outline" size={19} color={palette.text} />
-            {alertCount > 0 ? (
-              <View style={[styles.dot, { borderColor: palette.background }]} />
-            ) : null}
+            {alertCount > 0 ? <View style={[styles.dot, { borderColor: palette.background }]} /> : null}
           </PressableScale>
         ) : null}
       </View>

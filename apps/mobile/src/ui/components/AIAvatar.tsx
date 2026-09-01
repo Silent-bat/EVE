@@ -55,11 +55,7 @@ export function AIAvatar({
       ]}
     >
       {flat ? null : (
-        <SoftGradient
-          colors={[palette.ambient, palette.ambientDeep]}
-          direction="diagonal"
-          bands={10}
-        />
+        <SoftGradient colors={[palette.ambient, palette.ambientDeep]} direction="diagonal" bands={10} />
       )}
       <Ionicons name="sparkles" size={glyph} color={palette.textInverse} />
     </View>

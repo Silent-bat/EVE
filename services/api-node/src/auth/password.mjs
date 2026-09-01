@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
 
+// Keep scrypt work bounded for both signup and login. The HTTP body cap limits
+// allocation, but without a field-level ceiling an attacker can still make
+// every request spend CPU hashing a megabyte-sized password.
+export const MAX_PASSWORD_CHARS = 256;
+
 /**
  * @param {unknown} value
  * @returns {string} normalized lowercase email or "" if not a syntactically valid address
@@ -18,6 +23,9 @@ export function normalizeEmail(value) {
  * @returns {Promise<string>}
  */
 export async function hashPassword(password) {
+  if (typeof password !== "string" || password.length > MAX_PASSWORD_CHARS) {
+    throw new Error(`password must be at most ${MAX_PASSWORD_CHARS} characters`);
+  }
   const salt = crypto.randomBytes(16).toString("base64url");
   const hash = await scrypt(password, salt);
   return `scrypt:${salt}:${hash}`;
@@ -32,6 +40,7 @@ export async function hashPassword(password) {
  * @returns {Promise<boolean>}
  */
 export async function verifyPassword(password, stored) {
+  if (typeof password !== "string" || password.length > MAX_PASSWORD_CHARS) return false;
   const [scheme, salt, expected] = String(stored || "").split(":");
   if (scheme !== "scrypt" || !salt || !expected) return false;
   const actual = await scrypt(password, salt);

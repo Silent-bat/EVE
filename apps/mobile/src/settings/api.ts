@@ -30,10 +30,7 @@ export async function setDisplayName(displayName: string): Promise<Session> {
  * required: holding a session proves the phone is unlocked, not that the person
  * holding it knows the password.
  */
-export async function changePassword(input: {
-  currentPassword: string;
-  newPassword: string;
-}): Promise<void> {
+export async function changePassword(input: { currentPassword: string; newPassword: string }): Promise<void> {
   await apiFetch<{ ok: boolean }>("/v1/account/password", {
     method: "PUT",
     body: JSON.stringify(input),

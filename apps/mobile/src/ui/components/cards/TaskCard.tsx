@@ -79,15 +79,11 @@ export function TaskCard({
       ) : null}
       {due || task.source === "eve" || task.priority === "high" ? (
         <View style={styles.metaRow}>
-          {due ? (
-            <Text style={[styles.meta, { color: toneAccent(due.tone) }]}>{due.text}</Text>
-          ) : null}
+          {due ? <Text style={[styles.meta, { color: toneAccent(due.tone) }]}>{due.text}</Text> : null}
           {task.priority === "high" && !done ? (
             <View style={styles.metaGroup}>
               <Ionicons name="flag" size={10} color={toneAccent(priorityTone(task.priority))} />
-              <Text style={[styles.meta, { color: toneAccent(priorityTone(task.priority)) }]}>
-                High
-              </Text>
+              <Text style={[styles.meta, { color: toneAccent(priorityTone(task.priority)) }]}>High</Text>
             </View>
           ) : null}
           {task.source === "eve" ? (

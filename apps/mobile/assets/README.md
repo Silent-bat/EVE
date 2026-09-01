@@ -6,15 +6,15 @@ onboarding screens.
 
 ## What's here
 
-| File | Size | Used for |
-| --- | --- | --- |
-| `EVElogo1.png` | 574×448, transparent | **Source artwork.** Everything below is derived from it. |
-| `EVElogo2.svg` | 574×448 | Source artwork as SVG — but see the caveat below. |
-| `logo.png` | 1024×1024, transparent | The `EveMark` shown in the entry flow |
-| `icon.png` | 1024×1024, opaque | Home-screen icon (iOS rejects alpha) |
-| `adaptive-icon.png` | 1024×1024, transparent | Android foreground layer |
-| `splash.png` | 1024×1024, transparent | Launch screen |
-| `reference.png` | 1848×1344 | The lavender design reference the UI was built against |
+| File                | Size                   | Used for                                                 |
+| ------------------- | ---------------------- | -------------------------------------------------------- |
+| `EVElogo1.png`      | 574×448, transparent   | **Source artwork.** Everything below is derived from it. |
+| `EVElogo2.svg`      | 574×448                | Source artwork as SVG — but see the caveat below.        |
+| `logo.png`          | 1024×1024, transparent | The `EveMark` shown in the entry flow                    |
+| `icon.png`          | 1024×1024, opaque      | Home-screen icon (iOS rejects alpha)                     |
+| `adaptive-icon.png` | 1024×1024, transparent | Android foreground layer                                 |
+| `splash.png`        | 1024×1024, transparent | Launch screen                                            |
+| `reference.png`     | 1848×1344              | The lavender design reference the UI was built against   |
 
 ## Regenerating
 
@@ -26,12 +26,12 @@ replacing the source artwork; it needs Pillow.
 Coverage differs per file on purpose: the launcher icon needs padding the
 in-app mark does not, and Android needs more than iOS.
 
-| File | Mark covers | Why |
-| --- | --- | --- |
-| `logo.png` | 88% | Drawn inside a 62pt purple tile, so it wants minimal padding |
-| `icon.png` | 62% | iOS applies its own corner mask |
-| `adaptive-icon.png` | 60% | Inside Android's 66% safe zone with room to spare |
-| `splash.png` | 50% | Sits alone on a full screen |
+| File                | Mark covers | Why                                                          |
+| ------------------- | ----------- | ------------------------------------------------------------ |
+| `logo.png`          | 88%         | Drawn inside a 62pt purple tile, so it wants minimal padding |
+| `icon.png`          | 62%         | iOS applies its own corner mask                              |
+| `adaptive-icon.png` | 60%         | Inside Android's 66% safe zone with room to spare            |
+| `splash.png`        | 50%         | Sits alone on a full screen                                  |
 
 ## Resolution caveat
 

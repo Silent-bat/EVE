@@ -11,10 +11,21 @@ import { Readable } from "node:stream";
 import { createServer } from "node:http";
 import { connect } from "node:net";
 import { once } from "node:events";
+import { PassThrough } from "node:stream";
+import pino from "pino";
 
 import { readJSON, writeAuthRedirect } from "../src/http/responses.mjs";
-import { safeReturnTo } from "../src/google/oauth.mjs";
+import { redactURL, writeErrorResponse } from "../src/http/middleware.mjs";
+import {
+  MAX_OAUTH_STATES,
+  consumeOAuthHandoff,
+  createGoogleOAuthState,
+  createOAuthHandoff,
+  safeReturnTo,
+} from "../src/google/oauth.mjs";
+import { state } from "../src/storage/index.mjs";
 import { UNTRUSTED_CONTEXT_RULE } from "../src/briefing/assistant.mjs";
+import { REDACT_PATHS } from "../src/logger.mjs";
 
 /** Minimal ServerResponse stand-in — records what a handler wrote. */
 function fakeResponse() {
@@ -45,24 +56,66 @@ function fakeRequest(/** @type {Buffer[]} */ chunks) {
 
 test("finding 2 — the OAuth callback emits no HTML document to inject into", () => {
   const response = fakeResponse();
-  // This payload passes safeReturnTo, which is what made the old bug reachable.
-  const hostile = 'eve://cb</script><img src=x onerror=alert(document.body)>';
-  assert.equal(safeReturnTo(hostile), hostile, "precondition: the allowlist lets this through");
+  const hostile = "eve://cb</script><img src=x onerror=alert(document.body)>";
 
   writeAuthRedirect(/** @type {any} */ (response), "SESSIONTOKEN123", hostile);
 
-  assert.equal(response.statusCode, 302);
-  assert.equal(response.body, "", "a redirect has no body, so there is no markup to break out of");
+  assert.equal(response.statusCode, 200, "an invalid destination must fail closed");
+  assert.ok(response.body, "the safe fallback is a plain HTML message");
   assert.ok(!/<script|<img/i.test(response.body));
 });
 
-test("finding 2 — the token rides in Location and is marked no-store", () => {
+test("finding 2 — only a one-use handoff code rides in the URL fragment", () => {
   const response = fakeResponse();
-  writeAuthRedirect(/** @type {any} */ (response), "SESSIONTOKEN123", "eve://cb");
+  writeAuthRedirect(/** @type {any} */ (response), "HANDOFFCODE123", "eve://auth/google");
 
-  assert.match(response.headers.Location, /^eve:\/\/cb\?eve_token=SESSIONTOKEN123$/);
+  assert.match(response.headers.Location, /^eve:\/\/auth\/google#eve_code=HANDOFFCODE123$/);
+  assert.ok(!response.headers.Location.includes("eve_token"));
+  assert.ok(!response.headers.Location.includes("SESSIONTOKEN123"));
   assert.equal(response.headers["Cache-Control"], "no-store");
   assert.equal(response.headers["Referrer-Policy"], "no-referrer");
+});
+
+test("finding 2 — the redirect helper fails closed for an unallowlisted URL", () => {
+  const response = fakeResponse();
+  writeAuthRedirect(/** @type {any} */ (response), "HANDOFFCODE123", "eve://other-app/callback");
+  assert.equal(response.statusCode, 200);
+  assert.ok(!response.headers.Location);
+  assert.ok(!response.body.includes("HANDOFFCODE123"));
+});
+
+test("finding 2 — OAuth handoffs are single-use and reject malformed codes", () => {
+  const previous = state.oauthStates;
+  state.oauthStates = {};
+  try {
+    const code = createOAuthHandoff("handoff-user");
+    assert.equal(consumeOAuthHandoff(code), "handoff-user");
+    assert.equal(consumeOAuthHandoff(code), "", "a replay must not mint another session");
+    assert.equal(consumeOAuthHandoff("not a code"), "");
+  } finally {
+    state.oauthStates = previous;
+  }
+});
+
+test("finding 2 — public OAuth state storage stays bounded", () => {
+  const previous = state.oauthStates;
+  state.oauthStates = {};
+  try {
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    for (let index = 0; index < MAX_OAUTH_STATES; index += 1) {
+      state.oauthStates[`seed-${index}`] = {
+        userID: null,
+        mode: "login",
+        returnTo: "",
+        expiresAt,
+      };
+    }
+    const created = createGoogleOAuthState(null, "login", "");
+    assert.ok(state.oauthStates[created]);
+    assert.ok(Object.keys(state.oauthStates).length <= MAX_OAUTH_STATES);
+  } finally {
+    state.oauthStates = previous;
+  }
 });
 
 test("finding 2 — an empty returnTo still gets an escaped HTML fallback", () => {
@@ -74,10 +127,59 @@ test("finding 2 — an empty returnTo still gets an escaped HTML fallback", () =
 });
 
 test("finding 2 — safeReturnTo still rejects off-allowlist schemes", () => {
+  assert.equal(safeReturnTo("eve://auth/google"), "eve://auth/google");
+  assert.equal(safeReturnTo("eve://cb"), "");
+  assert.equal(safeReturnTo("eve://auth/google/extra"), "");
   assert.equal(safeReturnTo("https://evil.example/steal"), "");
   assert.equal(safeReturnTo("javascript:alert(1)"), "");
   assert.equal(safeReturnTo(""), "");
   assert.equal(safeReturnTo("http://localhost:8081/cb"), "http://localhost:8081/cb");
+});
+
+test("request URL logging redacts OAuth and token query values", () => {
+  assert.equal(
+    redactURL("/v1/google/callback?code=secret-code&state=secret-state&range=day"),
+    "/v1/google/callback?code=%5Bredacted%5D&state=%5Bredacted%5D&range=%5Bredacted%5D",
+  );
+});
+
+test("error responses use the redacted URL logger path", () => {
+  const response = fakeResponse();
+  const request = { url: "/v1/google/callback?code=secret-code&state=secret-state" };
+  // This is primarily a regression smoke check: the helper must accept the
+  // request shape and serialize a response without ever needing raw URL data.
+  writeErrorResponse(
+    new Error("callback failed"),
+    /** @type {any} */ (request),
+    /** @type {any} */ (response),
+  );
+  assert.equal(response.statusCode, 500);
+  assert.match(response.body, /callback failed/);
+});
+
+test("logger redacts credentials at the root and inside wrapped provider errors", async () => {
+  const stream = new PassThrough();
+  const logger = pino({ redact: { paths: REDACT_PATHS, censor: "[redacted]" } }, stream);
+  const line = once(stream, "data");
+  logger.info(
+    {
+      password: "root-password",
+      access_token: "root-access",
+      nested: { refresh_token: "nested-refresh", client_secret: "nested-secret" },
+      err: { cause: { response: { api_key: "deep-api-key", id_token: "deep-id-token" } } },
+      safe: "visible",
+    },
+    "credential probe",
+  );
+  const [chunk] = await line;
+  const parsed = JSON.parse(String(chunk));
+  assert.equal(parsed.password, "[redacted]");
+  assert.equal(parsed.access_token, "[redacted]");
+  assert.equal(parsed.nested.refresh_token, "[redacted]");
+  assert.equal(parsed.nested.client_secret, "[redacted]");
+  assert.equal(parsed.err.cause.response.api_key, "[redacted]");
+  assert.equal(parsed.err.cause.response.id_token, "[redacted]");
+  assert.equal(parsed.safe, "visible");
 });
 
 // ---------- Finding 5: unbounded request bodies ----------
@@ -179,6 +281,16 @@ test("finding 5 — a normal body is unaffected", async () => {
 
 test("finding 5 — an empty body is still an empty object", async () => {
   assert.deepEqual(await readJSON(/** @type {any} */ (fakeRequest([]))), {});
+});
+
+test("finding 5 — JSON routes reject null and array bodies", async () => {
+  for (const body of ["null", "[]", "[1,2,3]"]) {
+    const request = fakeRequest([Buffer.from(body)]);
+    await assert.rejects(() => readJSON(/** @type {any} */ (request)), {
+      status: 400,
+      message: "JSON body must be an object",
+    });
+  }
 });
 
 test("finding 5 — malformed JSON is still a 400, not a 413", async () => {

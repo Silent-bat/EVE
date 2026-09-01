@@ -18,11 +18,7 @@ import { CATEGORY_META, PROACTIVE_CATEGORY_ORDER } from "./categories";
 type Props = {
   visible: boolean;
   onClose: () => void;
-  onConfirm: (input: {
-    minutes: number;
-    categories: ProactiveCategoryName[];
-    reason: string;
-  }) => void;
+  onConfirm: (input: { minutes: number; categories: ProactiveCategoryName[]; reason: string }) => void;
 };
 
 const DURATION_OPTIONS = [
@@ -36,9 +32,7 @@ export function AvailableNowSheet({ visible, onClose, onConfirm }: Props) {
   const { palette, toneAccent } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [minutes, setMinutes] = useState<"30" | "120" | "240" | "720">("120");
-  const [selected, setSelected] = useState<Set<ProactiveCategoryName>>(
-    new Set(PROACTIVE_CATEGORY_ORDER),
-  );
+  const [selected, setSelected] = useState<Set<ProactiveCategoryName>>(new Set(PROACTIVE_CATEGORY_ORDER));
 
   function toggle(name: ProactiveCategoryName) {
     setSelected((current) => {
@@ -67,8 +61,8 @@ export function AvailableNowSheet({ visible, onClose, onConfirm }: Props) {
             <View style={{ flex: 1 }}>
               <Text style={styles.title}>Interrupt me</Text>
               <Text style={styles.subtitle}>
-                EVE will push proactive thoughts during this window, bypassing quiet hours
-                for the selected categories.
+                EVE will push proactive thoughts during this window, bypassing quiet hours for the selected
+                categories.
               </Text>
             </View>
             <PressableScale
@@ -100,7 +94,9 @@ export function AvailableNowSheet({ visible, onClose, onConfirm }: Props) {
                   key={name}
                   style={[
                     styles.categoryRow,
-                    active ? { borderColor: toneAccent("ambient"), backgroundColor: palette.ambientTint } : null,
+                    active
+                      ? { borderColor: toneAccent("ambient"), backgroundColor: palette.ambientTint }
+                      : null,
                   ]}
                   onPress={() => toggle(name)}
                   accessibilityRole="checkbox"
@@ -150,105 +146,105 @@ export function AvailableNowSheet({ visible, onClose, onConfirm }: Props) {
 
 function makeStyles({ palette }: ThemeValue) {
   return StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: palette.scrim,
-    justifyContent: "flex-end",
-  },
-  sheet: {
-    backgroundColor: palette.background,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.xxl,
-    gap: spacing.md,
-    maxHeight: "85%",
-  },
-  handle: {
-    alignSelf: "center",
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: palette.border,
-    marginBottom: spacing.sm,
-  },
-  headerRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: spacing.md,
-  },
-  title: {
-    color: palette.text,
-    fontSize: 20,
-    fontWeight: "800",
-  },
-  subtitle: {
-    color: palette.textMuted,
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 4,
-  },
-  close: {
-    width: MIN_TOUCH,
-    height: MIN_TOUCH,
-    borderRadius: MIN_TOUCH / 2,
-    backgroundColor: palette.surfaceMuted,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sectionLabel: {
-    color: palette.text,
-    fontSize: 12,
-    fontWeight: "800",
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
-    marginTop: spacing.sm,
-  },
-  categories: {
-    maxHeight: 300,
-  },
-  categoryRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: palette.border,
-    borderRadius: radius.sm,
-    marginBottom: 8,
-    backgroundColor: palette.surface,
-  },
-  categoryLabel: {
-    color: palette.text,
-    fontWeight: "800",
-    fontSize: 13,
-  },
-  categoryHint: {
-    color: palette.textMuted,
-    fontSize: 12,
-    lineHeight: 17,
-    marginTop: 2,
-  },
-  footer: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  primary: {
-    minHeight: MIN_TOUCH,
-    borderRadius: radius.sm,
-    backgroundColor: palette.ambient,
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-    gap: 6,
-  },
-  primaryText: {
-    color: palette.textInverse,
-    fontWeight: "800",
-    fontSize: 14,
-  },
+    backdrop: {
+      flex: 1,
+      backgroundColor: palette.scrim,
+      justifyContent: "flex-end",
+    },
+    sheet: {
+      backgroundColor: palette.background,
+      borderTopLeftRadius: radius.lg,
+      borderTopRightRadius: radius.lg,
+      paddingHorizontal: spacing.lg,
+      paddingTop: spacing.sm,
+      paddingBottom: spacing.xxl,
+      gap: spacing.md,
+      maxHeight: "85%",
+    },
+    handle: {
+      alignSelf: "center",
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: palette.border,
+      marginBottom: spacing.sm,
+    },
+    headerRow: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: spacing.md,
+    },
+    title: {
+      color: palette.text,
+      fontSize: 20,
+      fontWeight: "800",
+    },
+    subtitle: {
+      color: palette.textMuted,
+      fontSize: 13,
+      lineHeight: 19,
+      marginTop: 4,
+    },
+    close: {
+      width: MIN_TOUCH,
+      height: MIN_TOUCH,
+      borderRadius: MIN_TOUCH / 2,
+      backgroundColor: palette.surfaceMuted,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    sectionLabel: {
+      color: palette.text,
+      fontSize: 12,
+      fontWeight: "800",
+      letterSpacing: 0.4,
+      textTransform: "uppercase",
+      marginTop: spacing.sm,
+    },
+    categories: {
+      maxHeight: 300,
+    },
+    categoryRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.md,
+      paddingVertical: 12,
+      paddingHorizontal: 14,
+      borderWidth: 1,
+      borderColor: palette.border,
+      borderRadius: radius.sm,
+      marginBottom: 8,
+      backgroundColor: palette.surface,
+    },
+    categoryLabel: {
+      color: palette.text,
+      fontWeight: "800",
+      fontSize: 13,
+    },
+    categoryHint: {
+      color: palette.textMuted,
+      fontSize: 12,
+      lineHeight: 17,
+      marginTop: 2,
+    },
+    footer: {
+      flexDirection: "row",
+      gap: spacing.sm,
+      marginTop: spacing.sm,
+    },
+    primary: {
+      minHeight: MIN_TOUCH,
+      borderRadius: radius.sm,
+      backgroundColor: palette.ambient,
+      alignItems: "center",
+      justifyContent: "center",
+      flexDirection: "row",
+      gap: 6,
+    },
+    primaryText: {
+      color: palette.textInverse,
+      fontWeight: "800",
+      fontSize: 14,
+    },
   });
 }

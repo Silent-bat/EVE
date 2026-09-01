@@ -2,8 +2,34 @@
  * Google API client: token refresh + Gmail + Calendar reads.
  */
 import { config } from "../config.mjs";
+import { httpError } from "../http/responses.mjs";
+import { atLocalDateInZone, startOfDayInZone, startOfNextDayInZone, zonedParts } from "../utils/dates.mjs";
 import { save } from "../storage/index.mjs";
-import { googleJSON } from "./oauth.mjs";
+import {
+  GoogleResponseTooLargeError,
+  googleJSON,
+  normalizeGoogleTokenPayload,
+  readBoundedResponseJSON,
+} from "./oauth.mjs";
+import { parseEmailAddress, sanitizeHeaderValue } from "./address.mjs";
+
+// Gmail IDs are opaque provider values, but they are URL path segments in the
+// calls below. Restricting them to the URL-safe alphabet prevents a malformed
+// provider response (or a stale client value) from escaping the message path.
+export const MAX_GMAIL_MESSAGE_ID_CHARS = 256;
+export const MAX_GMAIL_MESSAGE_IDS = 150;
+export const DEFAULT_GMAIL_SEARCH_LIMIT = 10;
+export const MAX_GMAIL_SEARCH_LIMIT = 25;
+export const DEFAULT_GMAIL_MAX_BODY_CHARS = 20_000;
+export const GMAIL_MAX_BODY_CHARS =
+  Number.isSafeInteger(config.gmailMaxBodyChars) && config.gmailMaxBodyChars > 0
+    ? config.gmailMaxBodyChars
+    : DEFAULT_GMAIL_MAX_BODY_CHARS;
+export const DEFAULT_GMAIL_FETCH_CONCURRENCY = 6;
+export const GMAIL_FETCH_CONCURRENCY =
+  Number.isSafeInteger(config.gmailFetchConcurrency) && config.gmailFetchConcurrency > 0
+    ? config.gmailFetchConcurrency
+    : DEFAULT_GMAIL_FETCH_CONCURRENCY;
 
 /**
  * Mark a Google connection as unusable so the client prompts a fresh sign-in.
@@ -65,32 +91,51 @@ export async function refreshGoogleToken(user) {
     body.set("client_secret", config.google.clientSecret);
   }
 
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    signal: AbortSignal.timeout(config.outboundTimeoutMs),
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
+  let response;
+  try {
+    response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      signal: AbortSignal.timeout(config.outboundTimeoutMs),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+  } catch {
+    throw new Error("google refresh service unavailable");
+  }
 
-  const payload = await response.json();
+  let payload;
+  try {
+    payload = await readBoundedResponseJSON(response);
+  } catch (error) {
+    if (error instanceof GoogleResponseTooLargeError) {
+      throw new Error("google refresh response too large");
+    }
+    throw new Error("google refresh service returned invalid JSON");
+  }
   if (!response.ok) {
     // invalid_grant means the refresh_token was revoked or doesn't
     // match this client. Drop it so the next sign-in starts clean
     // (otherwise we keep trying with the same bad token forever).
-    if (payload.error === "invalid_grant") {
+    const providerError = payload && typeof payload === "object" ? payload : {};
+    if (providerError.error === "invalid_grant") {
       delete user.googleTokens.refresh_token;
       await markGoogleNeedsReconnect(user);
     }
-    throw new Error(payload.error_description || payload.error || "google refresh failed");
+    throw new Error(providerError.error_description || providerError.error || "google refresh failed");
   }
 
+  let normalized;
+  try {
+    normalized = normalizeGoogleTokenPayload(payload);
+  } catch {
+    throw new Error("google refresh response did not include a usable access token");
+  }
   user.googleTokens = {
     ...user.googleTokens,
-    ...payload,
+    ...normalized,
     // Google's refresh response only returns a NEW refresh_token if
     // there's a security event. When omitted, keep the old one.
-    refresh_token: payload.refresh_token || user.googleTokens.refresh_token,
-    expires_at: Date.now() + Number(payload.expires_in || 3600) * 1000,
+    refresh_token: normalized.refresh_token || user.googleTokens.refresh_token,
     client_id: clientID,
     needsReconnect: false,
   };
@@ -114,22 +159,18 @@ export async function fetchGmailMessages(user, _now, range = "day") {
   if (!accessToken) return [];
 
   const listURL = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
-  const max = range === "month" ? 150 : range === "week" ? 80 : 50;
+  const max = Math.min(MAX_GMAIL_MESSAGE_IDS, range === "month" ? 150 : range === "week" ? 80 : 50);
   listURL.searchParams.set("maxResults", String(max));
   listURL.searchParams.set("labelIds", "INBOX");
   if (range === "week") listURL.searchParams.set("q", "newer_than:7d");
   if (range === "month") listURL.searchParams.set("q", "newer_than:30d");
 
   const list = await googleJSON(listURL, accessToken);
-  const messages = await Promise.all(
-    (list.messages || [])
-      .slice(0, max)
-      .map((/** @type {any} */ item) =>
-        googleJSON(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${item.id}?format=full`,
-          accessToken,
-        ),
-      ),
+  const items = normalizeGmailMessageItems(list.messages).slice(0, max);
+  const messages = await mapWithConcurrency(
+    items,
+    ({ id }) => googleJSON(gmailMessageURL(id, "full"), accessToken),
+    GMAIL_FETCH_CONCURRENCY,
   );
 
   return messages.map((/** @type {any} */ message) => {
@@ -137,15 +178,16 @@ export async function fetchGmailMessages(user, _now, range = "day") {
     const from = headerValue(headers, "From");
     const parsedFrom = parseSender(from);
     const date = new Date(Number(message.internalDate || Date.now()));
+    const receivedParts = zonedParts(date, user.preferences?.timezone || "UTC");
     return {
       id: message.id,
       threadId: message.threadId,
       senderName: parsedFrom.name,
       senderEmail: parsedFrom.email,
       subject: headerValue(headers, "Subject") || "(no subject)",
-      receivedAtHour: date.getHours(),
-      receivedAtMinute: date.getMinutes(),
-      body: decodeGmailBody(message.payload) || message.snippet || "",
+      receivedAtHour: receivedParts.hour,
+      receivedAtMinute: receivedParts.minute,
+      body: boundedGmailBody(message),
     };
   });
 }
@@ -164,18 +206,14 @@ export async function listGmailMessageIds(user, opts = {}) {
   if (!accessToken) return [];
 
   const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
-  const max = opts.limit || (opts.range === "month" ? 150 : opts.range === "week" ? 80 : 50);
+  const max = boundedGmailLimit(opts.limit, defaultGmailLimit(opts.range));
   url.searchParams.set("maxResults", String(max));
   url.searchParams.set("labelIds", "INBOX");
   if (opts.range === "week") url.searchParams.set("q", "newer_than:7d");
   if (opts.range === "month") url.searchParams.set("q", "newer_than:30d");
 
   const list = await googleJSON(url, accessToken);
-  if (!Array.isArray(list.messages)) return [];
-  return list.messages.map((/** @type {any} */ item) => ({
-    id: String(item.id),
-    threadId: String(item.threadId),
-  }));
+  return normalizeGmailMessageItems(list.messages).slice(0, max);
 }
 
 /**
@@ -188,15 +226,13 @@ export async function listGmailMessageIds(user, opts = {}) {
  */
 export async function fetchGmailMessagesByIds(user, messageIds) {
   const accessToken = await refreshGoogleToken(user);
-  if (!accessToken || messageIds.length === 0) return [];
+  const ids = normalizeGmailMessageIds(messageIds);
+  if (!accessToken || ids.length === 0) return [];
 
-  const messages = await Promise.all(
-    messageIds.map((id) =>
-      googleJSON(
-        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`,
-        accessToken,
-      ).catch(() => null),
-    ),
+  const messages = await mapWithConcurrency(
+    ids,
+    (id) => googleJSON(gmailMessageURL(id, "full"), accessToken).catch(() => null),
+    GMAIL_FETCH_CONCURRENCY,
   );
 
   return messages.filter(Boolean).map((/** @type {any} */ message) => {
@@ -204,16 +240,17 @@ export async function fetchGmailMessagesByIds(user, messageIds) {
     const from = headerValue(headers, "From");
     const parsedFrom = parseSender(from);
     const date = new Date(Number(message.internalDate || Date.now()));
+    const receivedParts = zonedParts(date, user.preferences?.timezone || "UTC");
     return {
       id: message.id,
       threadId: message.threadId,
       senderName: parsedFrom.name,
       senderEmail: parsedFrom.email,
       subject: headerValue(headers, "Subject") || "(no subject)",
-      receivedAtHour: date.getHours(),
-      receivedAtMinute: date.getMinutes(),
+      receivedAtHour: receivedParts.hour,
+      receivedAtMinute: receivedParts.minute,
       receivedAt: date.toISOString(),
-      body: decodeGmailBody(message.payload) || message.snippet || "",
+      body: boundedGmailBody(message),
     };
   });
 }
@@ -226,12 +263,11 @@ export async function fetchGmailMessagesByIds(user, messageIds) {
  * @param {string} messageId
  */
 export async function fetchGmailMessageBody(user, messageId) {
+  const id = normalizeGmailMessageId(messageId);
+  if (!id) throw httpError(400, "invalid Gmail message id");
   const accessToken = await refreshGoogleToken(user);
   if (!accessToken) throw new Error("Gmail is not connected");
-  const message = await googleJSON(
-    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}?format=full`,
-    accessToken,
-  );
+  const message = await googleJSON(gmailMessageURL(id, "full"), accessToken);
   const headers = message.payload?.headers || [];
   const from = headerValue(headers, "From");
   const parsedFrom = parseSender(from);
@@ -242,7 +278,7 @@ export async function fetchGmailMessageBody(user, messageId) {
     senderEmail: parsedFrom.email,
     subject: headerValue(headers, "Subject") || "(no subject)",
     receivedAt: new Date(Number(message.internalDate || Date.now())).toISOString(),
-    body: decodeGmailBody(message.payload) || message.snippet || "",
+    body: boundedGmailBody(message),
   };
 }
 
@@ -258,23 +294,27 @@ export async function fetchGmailMessageBody(user, messageId) {
 export async function searchGmailMessages(user, input) {
   const accessToken = await refreshGoogleToken(user);
   if (!accessToken) return [];
-  const limit = Math.max(1, Math.min(Number(input.limit) || 10, 25));
+  const options = /** @type {{ query?: unknown, limit?: unknown }} */ (
+    input && typeof input === "object" ? input : {}
+  );
+  const limit = normalizeGmailSearchLimit(options.limit);
   const listURL = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
   listURL.searchParams.set("maxResults", String(limit));
-  listURL.searchParams.set("q", String(input.query || ""));
+  listURL.searchParams.set("q", String(options.query || ""));
 
   const list = await googleJSON(listURL, accessToken);
-  const items = Array.isArray(list.messages) ? list.messages.slice(0, limit) : [];
+  const items = normalizeGmailMessageItems(list.messages).slice(0, limit);
   if (items.length === 0) return [];
-  const messages = await Promise.all(
-    items.map((/** @type {any} */ item) =>
+  const messages = await mapWithConcurrency(
+    items,
+    ({ id }) =>
       googleJSON(
         // metadata format is much cheaper than full — we only need
         // headers + snippet for search results.
-        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${item.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
+        gmailMessageURL(id, "metadata", ["From", "Subject", "Date"]),
         accessToken,
       ),
-    ),
+    GMAIL_FETCH_CONCURRENCY,
   );
   return messages.map((/** @type {any} */ message) => {
     const headers = message.payload?.headers || [];
@@ -287,9 +327,130 @@ export async function searchGmailMessages(user, input) {
       senderEmail: parsedFrom.email,
       subject: headerValue(headers, "Subject") || "(no subject)",
       receivedAt: new Date(Number(message.internalDate || Date.now())).toISOString(),
-      snippet: message.snippet || "",
+      snippet: limitGmailBody(typeof message.snippet === "string" ? message.snippet : ""),
     };
   });
+}
+
+/**
+ * Normalize the model-provided search limit to a finite positive integer. The
+ * Gmail API rejects fractional and non-finite `maxResults` values; malformed
+ * model output falls back to the conservative default rather than reaching
+ * the provider or changing an unbounded request into a surprising value.
+ *
+ * @param {unknown} value
+ * @returns {number}
+ */
+export function normalizeGmailSearchLimit(value) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    return DEFAULT_GMAIL_SEARCH_LIMIT;
+  }
+  return Math.min(value, MAX_GMAIL_SEARCH_LIMIT);
+}
+
+/**
+ * Run provider requests through a bounded worker pool. Gmail list endpoints
+ * can return 150 IDs, and launching one promise per ID creates a burst of
+ * sockets and response buffers that is disproportionate to the user's poll.
+ * Results retain input order so callers keep their existing behavior.
+ *
+ * @template T, R
+ * @param {T[]} items
+ * @param {(item: T, index: number) => Promise<R>} worker
+ * @param {number} concurrency
+ * @returns {Promise<R[]>}
+ */
+async function mapWithConcurrency(items, worker, concurrency) {
+  if (items.length === 0) return [];
+  const width = Math.max(1, Math.min(Math.floor(Number(concurrency)) || 1, items.length));
+  const results = /** @type {R[]} */ (new Array(items.length));
+  let next = 0;
+
+  const runWorker = async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index], index);
+    }
+  };
+
+  await Promise.all(Array.from({ length: width }, () => runWorker()));
+  return results;
+}
+
+/** @param {unknown} value */
+export function normalizeGmailMessageId(value) {
+  if (typeof value !== "string" && typeof value !== "number") return "";
+  if (typeof value === "number" && !Number.isSafeInteger(value)) return "";
+  const id = String(value).trim();
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id) && id.length <= MAX_GMAIL_MESSAGE_ID_CHARS ? id : "";
+}
+
+/** @param {unknown} value */
+function normalizeGmailMessageIds(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  /** @type {string[]} */
+  const ids = [];
+  for (const candidate of value) {
+    const id = normalizeGmailMessageId(candidate);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+    if (ids.length >= MAX_GMAIL_MESSAGE_IDS) break;
+  }
+  return ids;
+}
+
+/** @param {unknown} value */
+function normalizeGmailMessageItems(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  /** @type {Array<{ id: string, threadId: string }>} */
+  const items = [];
+  for (const raw of value) {
+    const id = normalizeGmailMessageId(raw?.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const threadId = normalizeGmailMessageId(raw?.threadId);
+    items.push({ id, threadId });
+    if (items.length >= MAX_GMAIL_MESSAGE_IDS) break;
+  }
+  return items;
+}
+
+/** @param {unknown} range */
+function defaultGmailLimit(range) {
+  return range === "month" ? 150 : range === "week" ? 80 : 50;
+}
+
+/** @param {unknown} value @param {number} fallback */
+function boundedGmailLimit(value, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return Math.min(MAX_GMAIL_MESSAGE_IDS, fallback);
+  return Math.max(1, Math.min(MAX_GMAIL_MESSAGE_IDS, Math.floor(numeric)));
+}
+
+/** @param {string} id @param {"full" | "metadata"} format @param {string[]} [metadataHeaders] */
+function gmailMessageURL(id, format, metadataHeaders = []) {
+  const url = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(id)}`);
+  url.searchParams.set("format", format);
+  for (const header of metadataHeaders) url.searchParams.append("metadataHeaders", header);
+  return url;
+}
+
+/** @param {any} message */
+function boundedGmailBody(message) {
+  const decoded = decodeGmailBody(message?.payload);
+  const fallback = typeof message?.snippet === "string" ? message.snippet : "";
+  return limitGmailBody(decoded || fallback);
+}
+
+/** @param {string} value */
+function limitGmailBody(value) {
+  const text = typeof value === "string" ? value : String(value || "");
+  return text.length > GMAIL_MAX_BODY_CHARS ? text.slice(0, GMAIL_MAX_BODY_CHARS) : text;
 }
 
 /**
@@ -302,8 +463,11 @@ export async function fetchCalendarEvents(user, now) {
   const accessToken = await refreshGoogleToken(user);
   if (!accessToken) return [];
 
-  const timeMin = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0).toISOString();
-  const timeMax = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0).toISOString();
+  const timezone = user.preferences?.timezone || "UTC";
+  const start = startOfDayInZone(now, timezone);
+  const end = startOfNextDayInZone(now, timezone);
+  const timeMin = start.toISOString();
+  const timeMax = end.toISOString();
   const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
   url.searchParams.set("singleEvents", "true");
   url.searchParams.set("orderBy", "startTime");
@@ -311,39 +475,57 @@ export async function fetchCalendarEvents(user, now) {
   url.searchParams.set("timeMax", timeMax);
 
   const payload = await googleJSON(url, accessToken);
-  return (payload.items || []).slice(0, 10).map((/** @type {any} */ event) => {
-    const startsAt = new Date(event.start?.dateTime || event.start?.date || now);
-    const endsAt = new Date(event.end?.dateTime || event.end?.date || startsAt.getTime() + 30 * 60 * 1000);
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  return items.slice(0, 10).map((/** @type {any} */ event) => {
+    const startsAt = calendarInstant(event.start, timezone, now);
+    const endsAt = calendarInstant(event.end, timezone, new Date(startsAt.getTime() + 30 * 60 * 1000));
+    const startParts = zonedParts(startsAt, timezone);
     return {
       id: event.id,
       title: event.summary || "(busy)",
-      startHour: startsAt.getHours(),
-      startMinute: startsAt.getMinutes(),
+      startHour: startParts.hour,
+      startMinute: startParts.minute,
       durationMinutes: Math.max(15, Math.round((endsAt.getTime() - startsAt.getTime()) / 60000)),
       location: event.location || event.hangoutLink || "Calendar",
     };
   });
 }
 
+/** @param {any} endpoint @param {string} timezone @param {Date} fallback */
+function calendarInstant(endpoint, timezone, fallback) {
+  if (typeof endpoint?.dateTime === "string") {
+    const parsed = new Date(endpoint.dateTime);
+    if (Number.isFinite(parsed.getTime())) return parsed;
+  }
+  if (typeof endpoint?.date === "string") {
+    const parsed = atLocalDateInZone(endpoint.date, 0, 0, timezone);
+    if (Number.isFinite(parsed.getTime())) return parsed;
+  }
+  return fallback;
+}
+
 /**
- * @param {Array<{ name: string, value: string }>} headers
+ * @param {unknown} headers
  * @param {string} name
  */
 export function headerValue(headers, name) {
-  const entry = headers.find((header) => header.name.toLowerCase() === name.toLowerCase());
-  return entry ? String(entry.value || "") : "";
+  if (!Array.isArray(headers) || typeof name !== "string") return "";
+  const wanted = name.toLowerCase();
+  const entry = headers.find(
+    (header) =>
+      header &&
+      typeof header === "object" &&
+      typeof header.name === "string" &&
+      header.name.toLowerCase() === wanted,
+  );
+  return entry && typeof entry === "object" ? sanitizeHeaderValue(entry.value) : "";
 }
 
 /**
  * @param {string} value
  */
 export function parseSender(value) {
-  if (!value) return { name: "Unknown sender", email: "" };
-  const match = value.match(/^(.*?)<(.+)>$/);
-  if (match && match[1] !== undefined && match[2] !== undefined) {
-    return { name: match[1].trim().replace(/^"|"$/g, "") || match[2], email: match[2].trim() };
-  }
-  return { name: value.trim(), email: value.trim() };
+  return parseEmailAddress(value);
 }
 
 /**
@@ -366,15 +548,15 @@ export function decodeGmailBody(payload) {
   if (!payload) return "";
 
   const plain = findPartData(payload, "text/plain");
-  if (plain) return scrubText(decodeBase64URL(plain));
+  if (plain) return limitGmailBody(scrubText(decodeBase64URL(plain)));
 
   const html = findPartData(payload, "text/html");
-  if (html) return stripHTML(decodeBase64URL(html));
+  if (html) return limitGmailBody(stripHTML(decodeBase64URL(html)));
 
   // Neither type declared — some senders omit or misreport mimeType. Take the
   // first bytes in the tree, and strip markup in case they turn out to be HTML.
   const any = findPartData(payload, null);
-  return any ? stripHTML(decodeBase64URL(any)) : "";
+  return any ? limitGmailBody(stripHTML(decodeBase64URL(any))) : "";
 }
 
 /**
@@ -389,7 +571,11 @@ export function decodeGmailBody(payload) {
 function findPartData(payload, mimeType) {
   if (!payload || payload.filename) return "";
   const type = String(payload.mimeType || "").toLowerCase();
-  if ((mimeType === null || type === mimeType) && payload.body?.data) {
+  if (
+    (mimeType === null || type === mimeType) &&
+    typeof payload.body?.data === "string" &&
+    payload.body.data
+  ) {
     return payload.body.data;
   }
   if (Array.isArray(payload.parts)) {
@@ -403,14 +589,34 @@ function findPartData(payload, mimeType) {
 
 /** The entities that actually show up in mail. Anything else falls through. */
 const NAMED_ENTITIES = /** @type {Record<string, string>} */ ({
-  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
-  mdash: "—", ndash: "–", hellip: "…", bull: "•", middot: "·",
-  lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”",
-  copy: "©", reg: "®", trade: "™", euro: "€", pound: "£",
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  mdash: "—",
+  ndash: "–",
+  hellip: "…",
+  bull: "•",
+  middot: "·",
+  lsquo: "‘",
+  rsquo: "’",
+  ldquo: "“",
+  rdquo: "”",
+  copy: "©",
+  reg: "®",
+  trade: "™",
+  euro: "€",
+  pound: "£",
   // Invisible spacers. Decoded rather than ignored so the scrub below can
   // delete them — left encoded they render as literal "&zwnj;" in a summary.
-  zwnj: "\u200c", zwj: "\u200d", shy: "\u00ad",
-  ensp: " ", emsp: " ", thinsp: " ",
+  zwnj: "\u200c",
+  zwj: "\u200d",
+  shy: "\u00ad",
+  ensp: " ",
+  emsp: " ",
+  thinsp: " ",
 });
 
 /**
@@ -450,15 +656,17 @@ export function stripHTML(value) {
  */
 export function scrubText(value) {
   if (!value) return "";
-  return decodeEntities(String(value))
-    // Zero-width and soft-hyphen padding. Written as escapes because the literal
-    // characters are invisible in source.
-    .replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/g, "")
-    // U+034F (combining grapheme joiner) gets its own pass: it is a combining
-    // mark, and inside a character class that reads as a misleading class.
-    .replace(/\u034f/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return (
+    decodeEntities(String(value))
+      // Zero-width and soft-hyphen padding. Written as escapes because the literal
+      // characters are invisible in source.
+      .replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/g, "")
+      // U+034F (combining grapheme joiner) gets its own pass: it is a combining
+      // mark, and inside a character class that reads as a misleading class.
+      .replace(/\u034f/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
 
 /**

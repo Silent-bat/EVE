@@ -17,6 +17,9 @@ type EveNotificationListenerModule = {
   isPermissionGranted: () => Promise<boolean>;
   openSettings: () => void;
   configure: (apiUrl: string, authToken: string) => void;
+  clearConfiguration: () => void;
+  setAllowedPackages: (packages: string[]) => void;
+  getAllowedPackages: () => Promise<string[] | null>;
 };
 
 const nativeModule = NativeModules.EveNotificationListener as EveNotificationListenerModule | undefined;
@@ -39,6 +42,30 @@ export function configureNotificationSync(apiUrl: string, authToken: string) {
   if (notificationAccessSupported && nativeModule) {
     nativeModule.configure(apiUrl, authToken);
   }
+}
+
+/** Stop background capture and remove the native credential binding. */
+export function clearNotificationSync() {
+  if (notificationAccessSupported && nativeModule) {
+    nativeModule.clearConfiguration();
+  }
+}
+
+/**
+ * Limit background capture to explicitly selected Android package names. A
+ * missing selection preserves the listener's existing opt-in behavior; an
+ * empty array intentionally disables capture until apps are selected.
+ */
+export function setNotificationPackageAllowlist(packages: string[]) {
+  if (notificationAccessSupported && nativeModule) {
+    nativeModule.setAllowedPackages(packages);
+  }
+}
+
+export async function getNotificationPackageAllowlist(): Promise<string[] | null> {
+  if (!notificationAccessSupported || !nativeModule) return null;
+  const packages = await nativeModule.getAllowedPackages();
+  return Array.isArray(packages) ? packages : null;
 }
 
 export function subscribeToDeviceNotifications(listener: (event: DeviceNotificationEvent) => void) {

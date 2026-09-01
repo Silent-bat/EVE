@@ -3,106 +3,75 @@
  * here — components read them through `useTheme()` so light and dark render
  * from one set of component styles.
  *
- * The light scheme is a soft lavender: a tinted background with white cards
- * floating on it, and one purple that carries every AI action. The dark scheme
- * is not an inversion — it's a deep plum tuned so the semantic hierarchy
- * (mint=action, amber=warning, purple=agent) survives at low luminance, where
- * naive inversion turns pastel tints into mud.
- *
- * `ambient` is EVE's own colour. It marks the agent speaking or acting and is
- * deliberately the only saturated hue in the set, so a purple element always
- * means "this is EVE".
+ * The product chrome is intentionally monochrome. Light mode is anchored in
+ * pure white and black; dark mode is the exact inverse. Neutral steps preserve
+ * hierarchy without tinting the interface. The particle orb owns the product's
+ * colour and stays multicolor independently of these tokens.
  */
 
 export type ColorScheme = "light" | "dark";
 
 export const lightPalette = {
-  // Surfaces — the background is tinted and the cards are pure white, which is
-  // what gives the palette its lift. Inverting that (white page, tinted cards)
-  // reads as a form, not a premium surface.
-  background: "#f3effa",
+  background: "#ffffff",
   surface: "#ffffff",
-  surfaceAlt: "#ebe3f9",
-  surfaceMuted: "#f7f4fc",
-  surfaceInk: "#171432",
-  border: "#e7dff6",
-  borderStrong: "#d3c7ee",
-
-  // Text — near-black carries a little violet so it sits in the same family as
-  // the background instead of reading as a foreign grey.
-  text: "#171432",
-  textMuted: "#6e6a88",
+  surfaceAlt: "#eeeeee",
+  surfaceMuted: "#f6f6f6",
+  surfaceInk: "#000000",
+  border: "#dedede",
+  borderStrong: "#a8a8a8",
+  text: "#000000",
+  textMuted: "#616161",
   textInverse: "#ffffff",
-
-  // Semantic — pastel faces with deep ink counterparts for text on tints.
-  success: "#12a67c",
-  successDeep: "#0a6b50",
-  successTint: "#dcf5ec",
-  warning: "#c98a12",
-  warningDeep: "#7d5205",
-  warningTint: "#fbeed6",
-  danger: "#d4485f",
-  dangerDeep: "#9d1f34",
-  dangerTint: "#fbe2e7",
-  info: "#4a7fd4",
-  infoDeep: "#2a5599",
-  infoTint: "#e3ecfb",
-
-  // EVE's purple. Primary AI actions, the orb, the centre nav button.
-  ambient: "#7c5ce6",
-  ambientDeep: "#4a2fa8",
-  ambientTint: "#ede6fd",
-
-  // Modal backdrop. Violet-tinted rather than neutral black so sheets settle
-  // into the palette instead of punching a grey hole in it.
-  scrim: "rgba(23, 20, 50, 0.42)",
+  success: "#111111",
+  successDeep: "#000000",
+  successTint: "#eeeeee",
+  warning: "#333333",
+  warningDeep: "#000000",
+  warningTint: "#e4e4e4",
+  danger: "#000000",
+  dangerDeep: "#000000",
+  dangerTint: "#dddddd",
+  info: "#222222",
+  infoDeep: "#000000",
+  infoTint: "#eeeeee",
+  ambient: "#000000",
+  ambientDeep: "#292929",
+  ambientTint: "#eeeeee",
+  scrim: "rgba(0, 0, 0, 0.48)",
 };
 
 export const darkPalette: typeof lightPalette = {
-  // Surfaces — plum-shifted rather than neutral charcoal, so the dark scheme
-  // reads as the same product at night instead of a generic dark theme.
-  background: "#141020",
-  surface: "#1e1832",
-  surfaceAlt: "#2a2145",
-  surfaceMuted: "#241d3b",
-  surfaceInk: "#f3f0fb",
-  border: "#332a52",
-  borderStrong: "#473b6b",
-
-  // Text
-  text: "#f3f0fb",
-  textMuted: "#a09bbd",
-  textInverse: "#141020",
-
-  // Semantic — "deep" swaps to the lighter end in dark mode because it is
-  // used as ink on top of tints, and tints are now dark.
-  success: "#3fd3a4",
-  successDeep: "#8ef0cd",
-  successTint: "#0f3830",
-  warning: "#e8b552",
-  warningDeep: "#f5cd84",
-  warningTint: "#3a2c12",
-  danger: "#f0798f",
-  dangerDeep: "#f8a8b7",
-  dangerTint: "#3d1a25",
-  info: "#7ba9f0",
-  infoDeep: "#b3cffa",
-  infoTint: "#1a2a4a",
-
-  // Lifted well above the light value: at low luminance a mid purple loses its
-  // identity against a plum background, so EVE's colour has to brighten to
-  // stay recognisably EVE.
-  ambient: "#a88cff",
-  ambientDeep: "#c9b4ff",
-  ambientTint: "#2b2150",
-
-  scrim: "rgba(8, 5, 18, 0.7)",
+  background: "#000000",
+  surface: "#000000",
+  surfaceAlt: "#242424",
+  surfaceMuted: "#111111",
+  surfaceInk: "#ffffff",
+  border: "#292929",
+  borderStrong: "#5c5c5c",
+  text: "#ffffff",
+  textMuted: "#a3a3a3",
+  textInverse: "#000000",
+  success: "#eeeeee",
+  successDeep: "#ffffff",
+  successTint: "#1c1c1c",
+  warning: "#cfcfcf",
+  warningDeep: "#ffffff",
+  warningTint: "#242424",
+  danger: "#ffffff",
+  dangerDeep: "#ffffff",
+  dangerTint: "#292929",
+  info: "#dedede",
+  infoDeep: "#ffffff",
+  infoTint: "#1c1c1c",
+  ambient: "#ffffff",
+  ambientDeep: "#d6d6d6",
+  ambientTint: "#1c1c1c",
+  scrim: "rgba(255, 255, 255, 0.18)",
 };
 
 /**
- * Corner radii. The scale runs larger than a typical app: `xl` is the card
- * radius and `lg` the floor for anything interactive, because a soft pastel
- * palette on tight corners reads as unfinished rather than calm.
+ * Corner radii. The scale keeps surfaces soft while the monochrome palette
+ * stays crisp and utilitarian.
  */
 export const radius = {
   xs: 6,
@@ -141,35 +110,28 @@ export function paletteFor(scheme: ColorScheme): Palette {
  * Elevation. Android reads `elevation`, iOS reads the shadow* family, so each
  * level carries both — spreading one of these gets the same depth on either
  * platform without a Platform.select at every call site.
- */
-/**
- * Elevation. Android reads `elevation`, iOS reads the shadow* family, so each
- * level carries both — spreading one of these gets the same depth on either
- * platform without a Platform.select at every call site.
  *
- * Shadows are violet rather than black. A neutral shadow over a lavender
- * background greys the tint underneath it and the card looks dirty; tinting the
- * shadow toward the background keeps the lift without the grime.
+ * Shadows stay neutral so they do not introduce colour into the chrome.
  */
 export const elevation = {
   none: {},
   sm: {
     elevation: 2,
-    shadowColor: "#2a1f52",
+    shadowColor: "#000000",
     shadowOpacity: 0.06,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 3 },
   },
   md: {
     elevation: 5,
-    shadowColor: "#2a1f52",
+    shadowColor: "#000000",
     shadowOpacity: 0.09,
     shadowRadius: 20,
     shadowOffset: { width: 0, height: 8 },
   },
   lg: {
     elevation: 10,
-    shadowColor: "#2a1f52",
+    shadowColor: "#000000",
     shadowOpacity: 0.13,
     shadowRadius: 32,
     shadowOffset: { width: 0, height: 14 },
@@ -177,8 +139,8 @@ export const elevation = {
   /** Reserved for the floating nav bar and the centre EVE button. */
   float: {
     elevation: 14,
-    shadowColor: "#5b3fc4",
-    shadowOpacity: 0.28,
+    shadowColor: "#000000",
+    shadowOpacity: 0.2,
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 10 },
   },
@@ -187,7 +149,7 @@ export const elevation = {
 export function typeScaleFor(p: Palette) {
   return {
     // Hero sizes for first-run and the home greeting. Line heights are tight
-    // relative to size — large pastel type needs less leading than the ratio
+    // relative to size — large display type needs less leading than the ratio
     // that suits body copy, or the headline stops reading as one object.
     heroLg: { fontSize: 32, fontWeight: "800" as const, color: p.text, lineHeight: 38 },
     hero: { fontSize: 28, fontWeight: "800" as const, color: p.text, lineHeight: 34 },

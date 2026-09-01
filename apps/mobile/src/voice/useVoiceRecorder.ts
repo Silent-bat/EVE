@@ -50,6 +50,12 @@ const METER_FLOOR_DB = -60;
 export function useVoiceRecorder() {
   const recorder = useAudioRecorder({
     ...RecordingPresets.HIGH_QUALITY,
+    // Ask Android for the communications input path. It enables the platform
+    // echo canceller/AGC when EVE is speaking while the mic remains armed.
+    android: {
+      ...RecordingPresets.HIGH_QUALITY.android,
+      audioSource: "voice_communication",
+    },
     // Needed for `level`. Off by default, and the visualiser has nothing real
     // to animate from without it.
     isMeteringEnabled: true,
@@ -139,24 +145,26 @@ export function useVoiceRecorder() {
   const stop = useCallback(async (): Promise<VoiceClip | null> => {
     if (stateRef.current !== "recording") return null;
     setState("encoding");
+    let uri: string | null = null;
     try {
       await recorder.stop();
-      const uri = recorder.uri;
+      uri = recorder.uri;
       if (!uri) {
-        setState("idle");
         return null;
       }
       const audio = await FileSystem.readAsStringAsync(uri, {
         encoding: FileSystem.EncodingType.Base64,
       });
       const durationMs = startTime.current ? Date.now() - startTime.current : 0;
-      setState("idle");
       // expo-audio HIGH_QUALITY preset emits AAC inside an M4A container on
       // both iOS and Android. Gemini accepts audio/mp4 inline.
       return { audio, mimeType: mimeFromUri(uri), durationMs };
     } catch {
-      setState("idle");
       return null;
+    } finally {
+      if (uri) await deleteRecording(uri);
+      startTime.current = null;
+      setState("idle");
     }
   }, [recorder]);
 
@@ -176,6 +184,7 @@ export function useVoiceRecorder() {
     } catch {
       // Status is best-effort; fall back to our own bookkeeping.
     }
+    const uri = recorder.uri;
     if (engaged) {
       try {
         await recorder.stop();
@@ -183,6 +192,7 @@ export function useVoiceRecorder() {
         // best-effort
       }
     }
+    await deleteRecording(uri);
     startTime.current = null;
     setState("idle");
   }, [recorder]);
@@ -218,4 +228,9 @@ function mimeFromUri(uri: string): string {
     default:
       return Platform.OS === "ios" ? "audio/mp4" : "audio/aac";
   }
+}
+
+async function deleteRecording(uri: string | null): Promise<void> {
+  if (!uri) return;
+  await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => undefined);
 }

@@ -42,13 +42,17 @@ WORKDIR /app
 COPY --from=builder --chown=eve:eve /workspace/services/api-node/package.json ./package.json
 COPY --from=builder --chown=eve:eve /workspace/services/api-node/server.mjs ./server.mjs
 COPY --from=builder --chown=eve:eve /workspace/services/api-node/src ./src
-COPY --from=builder --chown=eve:eve /workspace/services/api-node/node_modules ./node_modules
+# The workspace uses pnpm's hoisted linker (`.npmrc`). Runtime dependencies are
+# therefore installed in the workspace root, while the service-local directory
+# only contains a small subset of links. Copy the complete production tree so
+# Node can resolve every API dependency after the build stage is discarded.
+COPY --from=builder --chown=eve:eve /workspace/node_modules ./node_modules
 
 USER eve
 
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- "http://127.0.0.1:${API_PORT}/v1/health" >/dev/null || exit 1
+  CMD wget -qO- "http://127.0.0.1:${API_PORT}/v1/ready" >/dev/null || exit 1
 
 CMD ["node", "server.mjs"]

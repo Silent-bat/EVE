@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EVE · Investor Deck</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:#06080E; --s1:#0D1117; --s2:#121A24; --s3:#1A2535;
+  --gold:#C8A96E; --gold-lt:#E2C98A; --gold-dk:#8A6E42;
+  --indigo:#7B8AFF; --coral:#FF6B6B; --teal:#3DD9B3;
+  --text:#E8EDF2; --muted:#93A0AE; --dim:#1E2A38;
+  --border:rgba(200,169,110,0.14); --border2:rgba(255,255,255,0.06); --r:10px;
+}
+html, body { width:100%; height:100%; overflow:hidden; background:var(--bg); color:var(--text); font-family:'DM Sans',sans-serif; }
+
+.deck { width:100vw; height:100vh; position:relative; }
+.slide { position:absolute; inset:0; overflow:hidden; opacity:0; pointer-events:none;
+  transition:opacity .55s cubic-bezier(.4,0,.2,1), transform .55s cubic-bezier(.4,0,.2,1); transform:translateY(18px); }
+.slide.on { opacity:1; pointer-events:all; transform:translateY(0); }
+
+.aura { position:absolute; border-radius:50%; pointer-events:none; filter:blur(120px); mix-blend-mode:screen; }
+.aura-gold { width:600px; height:600px; background:radial-gradient(circle,rgba(200,169,110,.18) 0%,transparent 70%); }
+.aura-indigo { width:400px; height:400px; background:radial-gradient(circle,rgba(123,138,255,.12) 0%,transparent 70%); }
+.grid { position:absolute; inset:0; pointer-events:none;
+  background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);
+  background-size:44px 44px; }
+
+.prog { position:fixed; top:0; left:0; height:2px; background:linear-gradient(90deg,var(--gold-dk),var(--gold),var(--gold-lt)); transition:width .4s; z-index:200; }
+.logo-fixed { position:fixed; top:22px; left:28px; z-index:100; font-family:'Cormorant Garamond',serif; font-weight:400; font-size:20px; letter-spacing:.18em; color:var(--gold); }
+.slide-lbl { position:fixed; top:24px; right:28px; z-index:100; font-family:'DM Mono',monospace; font-size:12px; color:var(--muted); }
+.nav { position:fixed; bottom:28px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:12px;
+  background:rgba(13,17,23,.85); backdrop-filter:blur(16px); border:1px solid var(--border); border-radius:50px; padding:9px 18px; z-index:100; }
+.nav button { background:none; border:none; cursor:pointer; font-family:'DM Sans',sans-serif; font-size:12px; color:var(--muted); padding:3px 8px; border-radius:20px; transition:all .2s; }
+.nav button:hover { color:var(--text); }
+.nav .arr { background:var(--s2); color:var(--text); width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:14px; padding:0; }
+.nav .arr:hover { background:var(--gold); color:var(--bg); }
+.nav .ctr { font-family:'DM Mono',monospace; font-size:12px; color:var(--muted); min-width:44px; text-align:center; }
+.dots { position:fixed; right:24px; top:50%; transform:translateY(-50%); display:flex; flex-direction:column; gap:7px; z-index:100; }
+.dot { width:5px; height:5px; border-radius:50%; background:var(--dim); cursor:pointer; transition:all .3s; }
+.dot.on { background:var(--gold); transform:scale(1.6); }
+
+.serif { font-family:'Cormorant Garamond',serif; }
+.mono { font-family:'DM Mono',monospace; }
+.eyebrow { font-family:'DM Mono',monospace; font-size:12px; letter-spacing:.15em; text-transform:uppercase; color:var(--gold); display:block; margin-bottom:10px; }
+.display { font-family:'Cormorant Garamond',serif; font-weight:400; line-height:.93; }
+.body-text { font-size:17px; line-height:1.7; color:rgba(232,237,242,.65); }
+
+.pad { padding:52px 64px; position:relative; z-index:1; height:100%; display:flex; flex-direction:column; justify-content:center; }
+.pad-sm { padding:44px 64px; position:relative; z-index:1; height:100%; display:flex; flex-direction:column; justify-content:center; }
+.two-col { display:grid; grid-template-columns:1fr 1fr; gap:40px; align-items:center; }
+.three-col { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+.four-col { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+.hdr { margin-bottom:28px; }
+.hdr h2 { font-size:clamp(32px,4.5vw,52px); color:var(--text); }
+
+.card { background:var(--s1); border:1px solid var(--border2); border-radius:var(--r); padding:18px 20px; }
+.card-g { border-left:2px solid var(--gold); border-radius:0 var(--r) var(--r) 0; }
+.card-i { border-left:2px solid var(--indigo); border-radius:0 var(--r) var(--r) 0; }
+.card-c { border-left:2px solid var(--coral); border-radius:0 var(--r) var(--r) 0; }
+.card-t { border-left:2px solid var(--teal); border-radius:0 var(--r) var(--r) 0; }
+.card h4 { font-size:16px; font-weight:500; color:var(--text); margin-bottom:5px; }
+.card p { font-size:14.5px; color:var(--muted); line-height:1.62; }
+.stat { background:var(--s1); border:1px solid var(--border2); border-radius:var(--r); padding:16px 18px; }
+.stat .val { font-family:'Cormorant Garamond',serif; font-size:44px; font-weight:500; color:var(--gold); line-height:1; }
+.stat .lbl { font-size:13px; color:var(--muted); margin-top:4px; line-height:1.4; }
+
+.flow { display:flex; flex-direction:column; }
+.fstep { display:flex; gap:14px; align-items:flex-start; }
+.fleft { display:flex; flex-direction:column; align-items:center; }
+.fnum { width:28px; height:28px; border-radius:50%; border:1px solid var(--gold-dk); display:flex; align-items:center; justify-content:center; font-size:13px; font-family:'DM Mono',monospace; color:var(--gold); flex-shrink:0; }
+.fline { width:1px; flex:1; min-height:16px; background:var(--dim); margin:3px 0; }
+.fbody { padding-bottom:18px; flex:1; }
+.fbody h5 { font-size:15.5px; font-weight:500; color:var(--text); margin-bottom:2px; }
+.fbody p { font-size:14px; color:var(--muted); line-height:1.55; }
+
+.comp-table { width:100%; border-collapse:collapse; font-size:14px; }
+.comp-table th { font-family:'DM Mono',monospace; font-size:12px; letter-spacing:.08em; color:var(--muted); padding:8px 10px; text-align:left; border-bottom:1px solid var(--border2); }
+.comp-table td { padding:9px 10px; border-bottom:1px solid rgba(255,255,255,.03); color:var(--muted); }
+.comp-table tr.eve td { color:var(--text); background:rgba(200,169,110,.05); }
+.comp-table tr.eve td:first-child { border-left:2px solid var(--gold); color:var(--gold); }
+.comp-table .sub { display:block; font-family:'DM Mono',monospace; font-size:11px; color:#6C7B8B; margin-top:2px; }
+.comp-table td:not(:first-child) { text-align:center; font-size:16px; }
+.yes { color:var(--teal); } .no { color:var(--coral); } .par { color:#B8860B; }
+
+.tl { position:relative; padding-left:26px; }
+.tl::before { content:''; position:absolute; left:0; top:0; bottom:0; width:1px; background:var(--dim); }
+.tlitem { position:relative; margin-bottom:16px; }
+.tlitem::before { content:''; position:absolute; left:-30px; top:5px; width:8px; height:8px; border-radius:50%; background:var(--dim); }
+.tlitem.done::before { background:var(--teal); }
+.tlitem.now::before { background:var(--gold); box-shadow:0 0 8px var(--gold); }
+.tlitem.next::before { background:var(--indigo); }
+.tlweek { font-size:12px; color:var(--muted); font-family:'DM Mono',monospace; margin-bottom:2px; letter-spacing:.08em; }
+.tltext { font-size:14px; color:rgba(232,237,242,.7); line-height:1.6; }
+
+.price-wrap { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+.pcrd { background:var(--s1); border:1px solid var(--border2); border-radius:var(--r); padding:20px; position:relative; }
+.pcrd.feat { border-color:var(--gold); }
+.feat-badge { position:absolute; top:-10px; left:50%; transform:translateX(-50%); background:var(--gold); color:var(--bg); font-size:10.5px; font-weight:600; padding:2px 10px; border-radius:20px; font-family:'DM Mono',monospace; letter-spacing:.08em; white-space:nowrap; }
+.pname { font-size:12px; color:var(--muted); font-family:'DM Mono',monospace; letter-spacing:.1em; text-transform:uppercase; margin-bottom:8px; }
+.pval { font-family:'Cormorant Garamond',serif; font-size:36px; font-weight:400; color:var(--text); }
+.pval span { font-size:15px; font-family:'DM Sans',sans-serif; color:var(--muted); font-weight:300; }
+.pfeats { margin-top:14px; display:flex; flex-direction:column; gap:5px; }
+.pfeats li { font-size:13px; color:var(--muted); list-style:none; display:flex; gap:6px; line-height:1.5; }
+.pfeats li::before { content:'→'; color:var(--gold); font-size:10px; flex-shrink:0; margin-top:1px; }
+
+hr.thin { border:none; border-top:1px solid var(--border2); margin:16px 0; }
+
+.tag { display:inline-block; font-size:11.5px; font-weight:500; padding:2px 9px; border-radius:20px; font-family:'DM Mono',monospace; letter-spacing:.05em; }
+.tg { background:rgba(61,217,179,.12); color:var(--teal); }
+.ti { background:rgba(123,138,255,.12); color:var(--indigo); }
+.to { background:rgba(200,169,110,.12); color:var(--gold); }
+.tc { background:rgba(255,107,107,.12); color:var(--coral); }
+
+.mbar { margin-bottom:14px; }
+.mbar-label { display:flex; justify-content:space-between; font-size:14px; margin-bottom:6px; }
+.mbar-label span:last-child { font-family:'DM Mono',monospace; color:var(--gold); }
+.mbar-track { height:6px; background:var(--dim); border-radius:3px; overflow:hidden; }
+.mbar-fill { height:100%; border-radius:3px; }
+
+/* ── ADDITIONS ─────────────────────────────────── */
+.ledger { width:100%; border-collapse:collapse; font-size:14px; }
+.ledger th { font-family:'DM Mono',monospace; font-size:12px; letter-spacing:.08em; color:var(--muted); text-align:left; padding:7px 10px; border-bottom:1px solid var(--border2); }
+.ledger td { padding:8px 10px; border-bottom:1px solid rgba(255,255,255,.03); color:rgba(232,237,242,.72); }
+.ledger td.n { font-family:'DM Mono',monospace; color:var(--gold); text-align:right; white-space:nowrap; }
+.ledger tr.sum td { border-top:1px solid var(--border); color:var(--text); font-weight:500; border-bottom:none; }
+.ledger tr.sum td.n { color:var(--teal); }
+.shipcol h4 { font-family:'DM Mono',monospace; font-size:12px; letter-spacing:.12em; text-transform:uppercase; margin-bottom:12px; }
+.shipcol.live h4 { color:var(--teal); }
+.shipcol.next h4 { color:var(--indigo); }
+.shiplist { list-style:none; display:flex; flex-direction:column; gap:7px; }
+.shiplist li { font-size:14px; color:rgba(232,237,242,.7); line-height:1.55; display:flex; gap:8px; }
+.shiplist li::before { content:'▪'; font-size:9px; margin-top:3px; flex-shrink:0; }
+.shipcol.live .shiplist li::before { color:var(--teal); }
+.shipcol.next .shiplist li::before { color:var(--indigo); }
+.note { font-size:13px; color:var(--muted); font-style:italic; line-height:1.6; }
+.src { font-family:'DM Mono',monospace; font-size:11px; color:#6C7B8B; letter-spacing:.04em; }
+.ask-num { font-family:'Cormorant Garamond',serif; font-size:clamp(64px,10vw,110px); font-weight:300; color:var(--gold); line-height:.9; }
+.use-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:24px; }
+.use-item { background:var(--s1); border:1px solid var(--border2); border-radius:var(--r); padding:14px; text-align:center; }
+.use-pct { font-family:'Cormorant Garamond',serif; font-size:32px; color:var(--indigo); }
+.use-lbl { font-size:13px; color:var(--muted); margin-top:4px; line-height:1.4; }
+.quote-lg { font-family:'Cormorant Garamond',serif; font-size:clamp(24px,3.6vw,42px); font-weight:300; font-style:italic; line-height:1.35; max-width:600px; border-left:2px solid var(--coral); padding-left:24px; color:var(--text); margin-bottom:30px; }
+#s1 { background:radial-gradient(ellipse 90% 70% at 40% 50%,#0D1B2A 0%,var(--bg) 65%); }
+#s15 { background:radial-gradient(ellipse 90% 70% at 60% 50%,#0D1B2A 0%,var(--bg) 65%); }
+.cover-wrap { display:flex; flex-direction:column; justify-content:center; height:100%; position:relative; z-index:1; padding:0 64px; }
+.cover-eyebrow { display:flex; align-items:center; gap:10px; margin-bottom:34px; }
+.pulse { width:7px; height:7px; border-radius:50%; background:var(--gold); animation:pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.4)} }
+.cover-eyebrow span { font-family:'DM Mono',monospace; font-size:12.5px; color:var(--gold); letter-spacing:.12em; }
+.eve-wordmark { font-family:'Cormorant Garamond',serif; font-size:clamp(110px,18vw,200px); font-weight:300; letter-spacing:-.02em; line-height:.85; color:var(--text); }
+.eve-wordmark em { color:var(--gold); font-style:normal; }
+.cover-tagline { font-family:'Cormorant Garamond',serif; font-size:clamp(18px,2.5vw,26px); font-weight:300; font-style:italic; color:rgba(200,169,110,.7); margin-top:18px; max-width:560px; }
+.cover-pills { display:flex; gap:8px; flex-wrap:wrap; margin-top:30px; }
+.pill { background:var(--s2); border:1px solid var(--border); border-radius:4px; padding:4px 12px; font-size:12.5px; color:var(--muted); font-family:'DM Mono',monospace; }
+</style>
+</head>
+<body>
+<div class="prog" id="prog"></div>
+<div class="logo-fixed">EVE</div>
+<div class="slide-lbl" id="lbl">01 / 18</div>
+<div class="dots" id="dots"></div>
+<div class="deck">
+
+<!-- ══════════ 01 · COVER ══════════ -->
+<section class="slide on" id="s1">
+  <div class="aura aura-gold" style="top:-140px;right:-120px"></div>
+  <div class="aura aura-indigo" style="bottom:-100px;left:20%"></div>
+  <div class="cover-wrap">
+    <div class="cover-eyebrow"><div class="pulse"></div><span>PRE-SEED · B2C SaaS · MOBILE-FIRST</span></div>
+    <div class="eve-wordmark">E<em>V</em>E</div>
+    <p class="cover-tagline">The ambient intelligence that thinks about your life, so you don't have to.</p>
+    <div class="cover-pills">
+      <div class="pill">Proactive Agent</div>
+      <div class="pill">Voice-Native</div>
+      <div class="pill">Consent-Gated</div>
+      <div class="pill">Mobile-Native</div>
+      <div class="pill">Live in Beta</div>
+    </div>
+    <p class="body-text" style="margin-top:34px;font-size:15.5px;max-width:520px">
+      Rosnel Kana · Founder &amp; CEO · <span style="color:var(--gold)">kanarosnel007@gmail.com</span> · <span style="color:var(--gold)">+237 694 319 849</span> · Douala, Cameroon
+    </p>
+  </div>
+</section>
+
+<!-- ══════════ 02 · PROBLEM ══════════ -->
+<section class="slide" id="s2">
+  <div class="grid"></div>
+  <div class="aura aura-gold" style="top:-180px;left:-140px;opacity:.6"></div>
+  <div class="pad">
+    <span class="eyebrow">01 · Problem</span>
+    <h2 class="display" style="font-size:clamp(30px,4.2vw,50px);margin-bottom:30px">The digital world demands more<br>attention than any human has.</h2>
+    <div class="two-col" style="align-items:start">
+      <div>
+        <p class="quote-lg" style="font-size:clamp(20px,2.8vw,32px);margin-bottom:22px">"I spend the first two hours of every morning just figuring out what I'm supposed to do, before I do any actual work."</p>
+        <p class="body-text" style="font-size:14.5px">Recurring theme across a dozen-plus founder and operator interviews we ran ourselves</p>
+      </div>
+      <div>
+        <div class="three-col" style="grid-template-columns:1fr 1fr;gap:12px">
+          <div class="stat"><div class="val">275</div><div class="lbl">Interruptions per knowledge worker per day, one every two minutes</div></div>
+          <div class="stat"><div class="val">117</div><div class="lbl">Emails received per person per day, alongside 153 chat messages</div></div>
+          <div class="stat"><div class="val">40%</div><div class="lbl">Check email before 6&nbsp;a.m.; 29% are back in the inbox by 10&nbsp;p.m.</div></div>
+          <div class="stat"><div class="val">48%</div><div class="lbl">Describe their own work as &ldquo;chaotic and fragmented&rdquo;</div></div>
+        </div>
+        <p class="src" style="margin-top:10px">Microsoft Work Trend Index Special Report, &ldquo;Breaking down the infinite workday,&rdquo; 17 June 2025. Study base: 31,000 knowledge workers across 31 markets plus Microsoft 365 telemetry through 15 Feb 2025.</p>
+      </div>
+    </div>
+    <hr class="thin" style="margin:24px 0 16px">
+    <p class="body-text" style="max-width:820px;font-size:15.5px">
+      The demand is no longer speculative. <strong style="color:var(--text)">OpenClaw, an open-source personal AI agent, became the most-starred repository on GitHub in under five months, passing 340,000 stars.</strong>
+      But it is self-hosted, desktop-first, requires the user to bring their own API keys, and had documented credential-handling failures. The want is proven. The product is not built.
+    </p>
+    <p class="src" style="margin-top:8px">Star count per openclaw.ai, observed 2026-08-25.</p>
+  </div>
+</section>
+
+<section class="slide" id="s16">
+  <div class="grid"></div>
+  <div class="aura aura-indigo" style="top:-100px;right:-120px;opacity:.6"></div>
+  <div class="pad">
+    <span class="eyebrow">02 · Why now</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:8px">This product was not buildable<br>eighteen months ago.</h2>
+    <p class="body-text" style="max-width:760px;margin-bottom:24px">Three things changed at once. None of them were true when the current generation of AI assistants was designed, which is why they all still wait to be spoken to.</p>
+    <div class="three-col" style="margin-bottom:22px">
+      <div class="card card-g">
+        <h4 style="font-family:'DM Mono',monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);margin-bottom:8px">01 · Cost collapsed</h4>
+        <p>Scoring every message a person receives, every day, used to be the expensive part. It is now $0.02 a day. Continuous background attention became affordable before anyone built a product that assumed it.</p>
+      </div>
+      <div class="card card-i">
+        <h4 style="font-family:'DM Mono',monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--indigo);margin-bottom:8px">02 · Voice became real-time</h4>
+        <p>Duplex streaming audio (speak, interrupt, be understood mid-sentence) moved from research demo to a priced API. At ≤$0.023 per conversation-minute, an hour a month fits inside a $12 subscription.</p>
+      </div>
+      <div class="card card-t">
+        <h4 style="font-family:'DM Mono',monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--teal);margin-bottom:8px">03 · Consumers started paying</h4>
+        <p>Non-gaming apps outgrossed games for the first time in 2025, credited to AI services, with generative-AI in-app revenue up 212% year over year. The willingness to pay for AI on a phone is eighteen months old.</p>
+      </div>
+    </div>
+    <hr class="thin">
+    <div class="two-col" style="gap:36px;align-items:start">
+      <div>
+        <p class="eyebrow">AND ONE THING THAT DID NOT CHANGE</p>
+        <p class="body-text" style="font-size:17px">Nobody solved permission. The agent projects that proved the demand hand the user a config file and an API key. The assistants that reached a billion phones will not risk speaking first, because a wrong interruption at that scale is a support crisis. The gap is not capability. It is the willingness to build a trust layer before building features.</p>
+      </div>
+      <div>
+        <p class="eyebrow">WHY A SMALL TEAM WINS THIS WINDOW</p>
+        <p class="body-text" style="font-size:17px">Interruption policy has to be tuned against real users who will tell you when you got it wrong, and iterated weekly. That is a small-team activity. By the time an incumbent has run the same loop through legal and brand review, the product that earned the right to interrupt already has the habit.</p>
+      </div>
+    </div>
+    <p class="src" style="margin-top:16px">Spending figures: Sensor Tower, State of Mobile 2026 (21 Jan 2026) and Q4 2025 Digital Market Index (Feb 2026). Model and audio prices per provider list pages, observed 2026-08-13.</p>
+  </div>
+</section>
+
+<!-- ══════════ 03 · SOLUTION ══════════ -->
+<section class="slide" id="s3">
+  <div class="aura aura-indigo" style="top:-60px;right:10%"></div>
+  <div class="pad">
+    <span class="eyebrow">03 · Solution</span>
+    <h2 class="display" style="font-size:clamp(30px,4.2vw,50px);margin-bottom:14px">She doesn't wait to be asked.</h2>
+    <p class="body-text" style="max-width:760px;margin-bottom:26px">
+      EVE is a proactive AI agent for mobile. It connects to the tools you already use, watches your inbox and calendar server-side, and reaches out
+      <em style="color:var(--text)">first</em> when something needs you, through a consent system that decides not just <em style="color:var(--text)">what</em> to say, but whether it has earned the right to interrupt.
+    </p>
+    <div class="three-col">
+      <div class="card card-g">
+        <h4>Proactive · it contacts you</h4>
+        <p>When an urgent email lands or a commitment is about to slip, EVE taps you on the shoulder. Every proactive thought is logged and visible; only the ones that clear your rules ever buzz your phone.</p>
+      </div>
+      <div class="card card-i">
+        <h4>Voice-native conversation</h4>
+        <p>Full duplex streaming voice: speak naturally, interrupt mid-sentence, no push-to-talk. Built on a live bidirectional audio session, not transcribe-then-reply.</p>
+      </div>
+      <div class="card card-t">
+        <h4>Consent-gated by design</h4>
+        <p>Five independent interruption categories, each with its own urgency threshold, delivery mode, quiet hours and frequency cap. One bad interruption can't poison the whole feature.</p>
+      </div>
+    </div>
+    <hr class="thin" style="margin:26px 0 18px">
+    <p class="body-text" style="max-width:820px;font-size:15.5px">
+      <strong style="color:var(--gold)">The hard problem in this category is not intelligence; it is permission.</strong>
+      An agent that interrupts badly gets its notifications disabled in week one and never recovers. EVE's consent layer is built and tested before scale, not bolted on after the churn.
+    </p>
+  </div>
+</section>
+
+<!-- ══════════ 04 · HOW IT WORKS ══════════ -->
+<section class="slide" id="s4">
+  <div class="grid"></div>
+  <div class="pad">
+    <span class="eyebrow">04 · How it works</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:24px">One loop, running whether<br>the app is open or not.</h2>
+    <div class="two-col" style="gap:44px;align-items:start">
+      <div class="flow">
+        <div class="fstep"><div class="fleft"><div class="fnum">1</div><div class="fline"></div></div><div class="fbody"><h5>Observe · server-side, continuous</h5><p>EVE polls Gmail every 15 minutes and fetches only what changed since the last cycle. No inbox mirroring, no re-reading history.</p></div></div>
+        <div class="fstep"><div class="fleft"><div class="fnum">2</div><div class="fline"></div></div><div class="fbody"><h5>Score · cheap model, every message</h5><p>Each new message is scored for urgency against the user's profile, priorities and saved facts. Cheap enough to run on everything.</p></div></div>
+        <div class="fstep"><div class="fleft"><div class="fnum">3</div><div class="fline"></div></div><div class="fbody"><h5>Decide · has this earned an interruption?</h5><p>The consent gate takes category, urgency, quiet hours and recent-push history and returns a decision: stay silent, wait for app open, or push now.</p></div></div>
+        <div class="fstep"><div class="fleft"><div class="fnum">4</div><div class="fline"></div></div><div class="fbody"><h5>Act · with approval</h5><p>EVE drafts the reply. The user approves or rejects in one tap. Rejections feed back into scoring.</p></div></div>
+        <div class="fstep"><div class="fleft"><div class="fnum">5</div></div><div class="fbody"><h5>Remember</h5><p>Confirmed facts, people, projects and decisions persist, visible and editable by the user, never a black box.</p></div></div>
+      </div>
+      <div>
+        <div class="card" style="padding:22px 24px">
+          <p class="eyebrow" style="margin-bottom:14px">EVE IN ACTION · 08:12</p>
+          <p class="body-text" style="font-size:15.5px;margin-bottom:14px"><strong style="color:var(--text)">Signal:</strong> Meeting with Sarah at 10:00. Her email from yesterday asks for the revised proposal. No reply sent.</p>
+          <hr class="thin" style="margin:12px 0">
+          <p class="body-text" style="font-size:15.5px;margin-bottom:14px"><strong style="color:var(--gold)">Gate:</strong> category <span class="mono" style="color:var(--text)">urgent_email</span> · urgency <span class="mono" style="color:var(--text)">high</span> · outside quiet hours · 0 pushes in last 4h → <span class="yes">PUSH</span></p>
+          <hr class="thin" style="margin:12px 0">
+          <p class="body-text" style="font-size:15.5px;font-style:italic;color:var(--text)">"You're seeing Sarah in under two hours. She asked for the revised proposal and hasn't heard back, so I've drafted a reply with your Thursday timeline. Want to look?"</p>
+          <hr class="thin" style="margin:12px 0">
+          <p class="body-text" style="font-size:14.5px"><strong style="color:var(--teal)">Outcome:</strong> one tap to approve. The commitment doesn't slip.</p>
+        </div>
+        <p class="note" style="margin-top:14px">The same loop with the gate set to <span class="mono">silent</span> produces a calm daily briefing instead of a notification. The user owns that dial.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 05 · WHAT IS BUILT ══════════ -->
+<section class="slide" id="s5">
+  <div class="aura aura-gold" style="bottom:-160px;right:-120px;opacity:.5"></div>
+  <div class="pad">
+    <span class="eyebrow">05 · Product status</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:8px">Built, not described.</h2>
+    <p class="body-text" style="max-width:720px;margin-bottom:24px">Everything in the left column runs today against real Gmail accounts, with automated tests and CI. Everything in the right column is designed and scoped, not shipped. We draw the line explicitly.</p>
+    <div class="two-col" style="gap:36px;align-items:start">
+      <div class="card shipcol live" style="border-left:2px solid var(--teal);border-radius:0 var(--r) var(--r) 0">
+        <h4>Live in beta</h4>
+        <ul class="shiplist">
+          <li>Google OAuth + email/password auth, rate-limited</li>
+          <li>Diff-first Gmail sync: fetches only new messages</li>
+          <li>LLM urgency scoring &amp; persistent priority inbox</li>
+          <li>Daily briefing generation</li>
+          <li>Reply drafting with approve / reject</li>
+          <li>Consent-gated proactive engine: 5 categories, thresholds, quiet hours, frequency caps</li>
+          <li>Duplex streaming voice session</li>
+          <li>User-visible persistent facts (add / remove)</li>
+          <li>Push notifications, iOS + Android</li>
+          <li>Postgres persistence · 14 backend test suites · CI on every commit</li>
+        </ul>
+      </div>
+      <div class="card shipcol next" style="border-left:2px solid var(--indigo);border-radius:0 var(--r) var(--r) 0">
+        <h4>Designed · next 2 quarters</h4>
+        <ul class="shiplist">
+          <li><strong style="color:var(--text)">Versioned memory graph</strong>: entities, relationships and temporal edges replacing the current flat fact store</li>
+          <li><strong style="color:var(--text)">Fixed-size context assembly</strong>, so a user with 8 months of history costs the same per call as a new user</li>
+          <li>Calendar write actions (scheduling, rescheduling)</li>
+          <li>Outlook and Slack connectors</li>
+          <li>On-device voice activity detection for instant barge-in</li>
+          <li>Accessibility-complete voice control: full hands-free operation</li>
+        </ul>
+        <hr class="thin">
+        <p class="note">These two items are the technical bet the round funds. The product works without them; it does not <em>compound</em> without them.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 06 · TECHNOLOGY ══════════ -->
+<section class="slide" id="s6">
+  <div class="grid"></div>
+  <div class="pad">
+    <span class="eyebrow">06 · Technology</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:22px">Three layers. Deliberately boring<br>where boring is cheaper.</h2>
+    <div class="three-col" style="margin-bottom:20px">
+      <div class="card card-t">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><h4 style="margin:0">Ingest &amp; Scoring</h4><span class="tag tg">SHIPPED</span></div>
+        <p>Node service, no framework. Diff-first Gmail polling on a 15-minute cycle; only genuinely new messages reach a model. Urgency scoring runs on a cheap fast model so it can run on every message, every cycle.</p>
+      </div>
+      <div class="card card-g">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><h4 style="margin:0">Consent Gate</h4><span class="tag to">SHIPPED · CORE IP</span></div>
+        <p>A pure function: (preferences, thought, recent pushes, time) → silent / soft / push. Side effects are separate from the decision, so interruption policy is unit-testable rather than emergent. This is what makes a proactive agent survivable.</p>
+      </div>
+      <div class="card card-i">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><h4 style="margin:0">Memory</h4><span class="tag ti">FLAT TODAY → GRAPH NEXT</span></div>
+        <p>Today: a bounded, user-visible set of durable facts injected into every prompt. Next: a versioned graph in Postgres with temporal edges, so retrieval gets more precise as history grows instead of more expensive.</p>
+      </div>
+    </div>
+    <div class="two-col" style="gap:36px;align-items:start">
+      <div>
+        <p class="eyebrow">MODEL TIERING · THE COST LEVER</p>
+        <table class="ledger">
+          <tr><td>Urgency scoring · every message</td><td class="n">fast tier</td></tr>
+          <tr><td>Morning briefing · 1× daily</td><td class="n">reasoning tier</td></tr>
+          <tr><td>Chat turns</td><td class="n">fast tier</td></tr>
+          <tr><td>Live voice session</td><td class="n">realtime audio tier</td></tr>
+        </table>
+        <p class="note" style="margin-top:12px">Model-agnostic by construction: the provider sits behind one interface. We use Google's Gemini family today on price-performance; switching costs us a config change, not a rewrite.</p>
+      </div>
+      <div>
+        <p class="eyebrow">STACK</p>
+        <table class="ledger">
+          <tr><td>Mobile</td><td class="n">React Native · Expo · iOS + Android</td></tr>
+          <tr><td>Backend</td><td class="n">Node ESM · typed · zero-framework</td></tr>
+          <tr><td>Data</td><td class="n">PostgreSQL</td></tr>
+          <tr><td>Voice</td><td class="n">Streaming duplex WebSocket</td></tr>
+          <tr><td>Quality</td><td class="n">CI: lint · typecheck · tests</td></tr>
+        </table>
+        <p class="note" style="margin-top:12px">A one-engineer stack on purpose. No Kubernetes, no message broker, no service mesh to pay for before there is load to justify it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" id="s17">
+  <div class="grid"></div>
+  <div class="aura aura-gold" style="bottom:-140px;left:-120px;opacity:.5"></div>
+  <div class="pad">
+    <span class="eyebrow">07 · Data &amp; privacy</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:8px">An assistant that reads your mail<br>has to be auditable.</h2>
+    <p class="body-text" style="max-width:800px;margin-bottom:22px">The posture below is enforced in code today, not in a policy document. The two gaps at the bottom are real and funded by this round; we would rather show them than let a diligence process find them.</p>
+    <div class="two-col" style="gap:32px;align-items:start;margin-bottom:20px">
+      <div class="card card-t">
+        <h4 style="font-family:'DM Mono',monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--teal);margin-bottom:10px">What EVE holds</h4>
+        <ul class="shiplist" style="gap:6px">
+          <li>Two Google scopes only: <span class="mono">gmail.readonly</span> and <span class="mono">gmail.send</span>. No Drive, no contacts, no calendar write.</li>
+          <li>A short briefing summary per important message, never the full body. Bodies are fetched live by tool call when you ask, and not persisted.</li>
+          <li>A capped list of facts about you, currently 200 maximum, in plain readable text you can inspect line by line.</li>
+          <li>OAuth tokens, deleted outright on disconnect rather than marked stale, so nothing can keep reading mail.</li>
+        </ul>
+      </div>
+      <div class="card card-c">
+        <h4 style="font-family:'DM Mono',monospace;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--coral);margin-bottom:10px">What EVE does not hold</h4>
+        <ul class="shiplist" style="gap:6px">
+          <li>No archive of your mailbox. Nothing is copied wholesale; the poller works on a 15-minute diff of message IDs.</li>
+          <li>No training on user data. No customer content is used to tune a model, ours or a provider's.</li>
+          <li>No opaque embedding store. Memory is text, so there is no state a user cannot read and correct.</li>
+          <li>No silent interruption. Every proactive push passes a deterministic consent check that is unit-tested and inspectable.</li>
+        </ul>
+      </div>
+    </div>
+    <table class="ledger" style="margin-bottom:16px">
+      <tr><th>Control</th><th>Enforced by</th><th style="text-align:right">Setting</th></tr>
+      <tr><td>Priority inbox retention</td><td>Age cutoff pruned on every write</td><td class="n">30 days</td></tr>
+      <tr><td>Priority inbox size</td><td>Hard entry cap after pruning</td><td class="n">200 entries</td></tr>
+      <tr><td>Long-term memory size</td><td>Deduplicated flat fact list, user-visible</td><td class="n">200 facts</td></tr>
+      <tr><td>Session control</td><td>Revoke-all-sessions endpoint</td><td class="n">shipped</td></tr>
+    </table>
+    <div class="two-col" style="gap:32px;align-items:start">
+      <p class="note">Honest gaps: field-level encryption at rest is not yet implemented, and there is no self-serve account-deletion or data-export endpoint; disconnecting Google removes the tokens, but the account record stays. Both are M0–M3 items in the roadmap, ahead of any paid launch.</p>
+      <p class="note">Design consequence: because the store is small, textual and capped, a support conversation about "why did you tell me that" can be answered by reading the user's own memory back to them. That is not a privacy feature so much as the thing that makes trust debuggable.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 07 · UNIT ECONOMICS ══════════ -->
+<section class="slide" id="s7">
+  <div class="aura aura-indigo" style="top:-80px;left:-100px;opacity:.7"></div>
+  <div class="pad">
+    <span class="eyebrow">08 · Unit economics</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:8px">We know what a user costs.<br>To the cent.</h2>
+    <p class="body-text" style="max-width:740px;margin-bottom:22px">Built from published per-token list prices, not estimates. This is the number most AI companies cannot answer at pre-seed, and the reason our pricing has a floor under it.</p>
+    <div class="two-col" style="gap:36px;align-items:start">
+      <div>
+        <p class="eyebrow">DAILY COST · ONE ACTIVE USER</p>
+        <table class="ledger">
+          <thead><tr><th>Workload</th><th style="text-align:right">Cost / day</th></tr></thead>
+          <tbody>
+            <tr><td>Urgency scoring · ~150 emails, batched</td><td class="n">$0.02</td></tr>
+            <tr><td>Morning briefing · reasoning tier</td><td class="n">$0.03</td></tr>
+            <tr><td>Chat · ~10 turns</td><td class="n">$0.02</td></tr>
+            <tr class="sum"><td>Text subtotal</td><td class="n">$0.07 / day</td></tr>
+          </tbody>
+        </table>
+        <p class="note" style="margin-top:12px">≈ <strong style="color:var(--text)">$2.10 / month</strong> per fully-active user. Voice is billed separately below because audio is an order of magnitude more expensive than text, and pretending otherwise is how AI companies discover negative margin in month six.</p>
+      </div>
+      <div>
+        <p class="eyebrow">VOICE · METERED, NOT UNLIMITED</p>
+        <table class="ledger">
+          <thead><tr><th>Tier</th><th style="text-align:right">Included voice</th><th style="text-align:right">Blended margin</th></tr></thead>
+          <tbody>
+            <tr><td>Pro · $12/mo</td><td class="n">60 min/mo</td><td class="n">~71%</td></tr>
+            <tr><td>Power · $19/mo</td><td class="n">240 min/mo</td><td class="n">~60%</td></tr>
+          </tbody>
+        </table>
+        <p class="note" style="margin-top:12px">Streaming audio costs ≤$0.023 per conversation-minute at list price. Including 60 minutes in Pro costs $1.38/month, putting an all-in Pro user at ~$3.50 against $12 of revenue. Minutes beyond the allowance meter at $0.05, roughly a 54% margin, so heavy voice use is profitable rather than a liability.</p>
+        <hr class="thin">
+        <div class="three-col" style="grid-template-columns:1fr 1fr;gap:12px">
+          <div class="stat"><div class="val">~70%</div><div class="lbl">Blended gross margin at list price, before volume discounts</div></div>
+          <div class="stat"><div class="val">$0.07</div><div class="lbl">Text cost per active user per day, enforced at the infrastructure layer</div></div>
+        </div>
+      </div>
+    </div>
+    <p class="src" style="margin-top:16px">Model prices per provider's public pricing page, observed 2026-08-13. Batch-mode and committed-use discounts are not assumed. Margin excludes hosting, payment processing and support.</p>
+  </div>
+</section>
+
+<!-- ══════════ 08 · COMPETITION ══════════ -->
+<section class="slide" id="s8">
+  <div class="grid"></div>
+  <div class="pad">
+    <span class="eyebrow">09 · Competitive position</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:18px">Everyone built a better inbox.<br>Nobody built someone who reads it.</h2>
+    <table class="comp-table">
+      <thead>
+        <tr>
+          <th style="width:22%">&nbsp;</th>
+          <th>Mobile-<br>native</th>
+          <th>Speaks<br>first</th>
+          <th>Voice-<br>native</th>
+          <th>Consent-<br>gated</th>
+          <th>No setup<br>required</th>
+          <th>Under<br>$20/mo</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="eve">
+          <td><strong>EVE</strong></td>
+          <td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td>
+        </tr>
+        <tr>
+          <td>AI email clients<br><span class="sub">Superhuman, Shortwave</span></td>
+          <td class="par">◐</td><td class="no">○</td><td class="no">○</td><td class="no">○</td><td class="yes">●</td><td class="no">○</td>
+        </tr>
+        <tr>
+          <td>Assistant chatbots<br><span class="sub">ChatGPT, Claude, Gemini</span></td>
+          <td class="yes">●</td><td class="no">○</td><td class="par">◐</td><td class="no">○</td><td class="yes">●</td><td class="yes">●</td>
+        </tr>
+        <tr>
+          <td>Agent frameworks<br><span class="sub">OpenClaw and successors</span></td>
+          <td class="no">○</td><td class="par">◐</td><td class="no">○</td><td class="no">○</td><td class="no">○</td><td class="yes">●</td>
+        </tr>
+        <tr>
+          <td>Voice assistants<br><span class="sub">Siri, Alexa, Assistant</span></td>
+          <td class="yes">●</td><td class="no">○</td><td class="yes">●</td><td class="par">◐</td><td class="yes">●</td><td class="yes">●</td>
+        </tr>
+        <tr>
+          <td>Executive-assistant services<br><span class="sub">human EA, outsourced</span></td>
+          <td class="no">○</td><td class="yes">●</td><td class="yes">●</td><td class="yes">●</td><td class="no">○</td><td class="no">○</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="two-col" style="gap:36px;margin-top:22px">
+      <p class="body-text"><strong style="color:var(--gold)">Why the gap persists.</strong> Incumbents cannot speak first without risking their own notification credibility. A mail client that interrupts you wrongly loses the inbox; an OS assistant that interrupts you wrongly gets muted permanently. We start with permission as the primitive, which is a product decision they cannot retrofit cheaply.</p>
+      <p class="body-text"><strong style="color:var(--gold)">Why frameworks are not the competition.</strong> The most-starred agent projects require a terminal, API keys and a config file. They prove enormous demand for autonomous agents and simultaneously prove that demand is unserved for anyone who will not open a terminal, which is almost everyone.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 09 · MARKET ══════════ -->
+<section class="slide" id="s9">
+  <div class="aura aura-gold" style="top:-140px;right:-140px;opacity:.45"></div>
+  <div class="pad">
+    <span class="eyebrow">10 · Market</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:20px">Bottom-up first.<br>Top-down for context only.</h2>
+    <div class="two-col" style="gap:44px;align-items:start">
+      <div>
+        <p class="eyebrow">THE ONLY MATH THAT BINDS US</p>
+        <table class="ledger">
+          <tbody>
+            <tr><td>Knowledge workers in English-speaking markets on mobile-first email <span class="src">assumption</span></td><td class="n">~180M</td></tr>
+            <tr><td>Segment reachable in years 1–3 via app stores, content and referral <span class="src">0.5% reach assumption</span></td><td class="n">~900K</td></tr>
+            <tr><td>Install → paid conversion <span class="src">assumption, to be replaced by beta data</span></td><td class="n">4%</td></tr>
+            <tr class="sum"><td>Implied ARR at $12 ARPU</td><td class="n">~$5.2M</td></tr>
+          </tbody>
+        </table>
+        <p class="note" style="margin-top:12px">We would rather show you a small number we can defend than a large number we cannot. The figure that matters to this round is far smaller: <strong style="color:var(--text)">4,000 paying users is ~$48K MRR</strong>, and that is the milestone this raise is sized against. Every row above is an assumption and is labelled as one; reach and conversion are the two we intend to replace with measured numbers during this round.</p>
+      </div>
+      <div>
+        <p class="eyebrow">CONTEXT</p>
+        <div class="three-col" style="grid-template-columns:1fr;gap:10px">
+          <div class="stat"><div class="val">$167B</div><div class="lbl">Global in-app purchase revenue in 2025, +10% YoY. Non-gaming apps outgrossed games for the first time (+21% YoY), credited to AI services; ChatGPT was the third top-grossing app of the year. <span class="src">Sensor Tower, State of Mobile 2026, 21 Jan 2026</span></div></div>
+          <div class="stat"><div class="val">+212%</div><div class="lbl">YoY growth in generative-AI in-app purchase revenue, reaching $1.7B in Q4 2025 alone on 1.1B downloads in the quarter (+89% YoY). <span class="src">Sensor Tower, Q4 2025 Digital Market Index, Feb 2026</span></div></div>
+        </div>
+        <hr class="thin">
+        <p class="eyebrow">BEACHHEAD LOGIC</p>
+        <p class="body-text" style="font-size:17px">We start where the pain is sharpest and the channel is cheapest: founders, freelancers and operators who live in their inbox, run their business from a phone, and already pay for two or three productivity subscriptions. They convert on a single morning briefing that is actually right.</p>
+        <p class="body-text" style="font-size:17px">Expansion is by <em>surface</em>, not by segment: the same engine that triages email triages calendar, then messages, then documents. Each connector raises retention on the users we already have before it acquires new ones.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 10 · BUSINESS MODEL ══════════ -->
+<section class="slide" id="s10">
+  <div class="grid"></div>
+  <div class="pad">
+    <span class="eyebrow">11 · Business model</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:6px">Subscription. Metered where<br>the cost is real.</h2>
+    <p class="body-text" style="max-width:700px;margin-bottom:22px">Three tiers. Text is effectively free to serve, so it is unlimited. Voice is metered because voice genuinely costs money, and every tier stays gross-margin positive at published list prices.</p>
+    <div class="price-wrap">
+      <div class="pcrd">
+        <div class="pname">Free</div>
+        <div class="pval">$0 <span>forever</span></div>
+        <ul class="pfeats">
+          <li>1 mailbox</li>
+          <li>Daily briefing</li>
+          <li>Priority inbox</li>
+          <li>10 voice minutes / month</li>
+          <li>No proactive push</li>
+        </ul>
+        <p class="note">Acquisition and proof. Costs us cents; earns us the trust needed to be allowed to interrupt.</p>
+      </div>
+      <div class="pcrd feat">
+        <span class="feat-badge">CORE</span>
+        <div class="pname">Pro</div>
+        <div class="pval">$12 <span>/ month</span></div>
+        <ul class="pfeats">
+          <li>Unlimited mailboxes</li>
+          <li>Proactive push, fully configurable</li>
+          <li>Reply drafting with approval</li>
+          <li>60 voice minutes / month</li>
+          <li>Persistent memory</li>
+        </ul>
+        <p class="note">~71% gross margin, voice included.</p>
+      </div>
+      <div class="pcrd">
+        <div class="pname">Power</div>
+        <div class="pval">$19 <span>/ month</span></div>
+        <ul class="pfeats">
+          <li>Everything in Pro</li>
+          <li>240 voice minutes / month</li>
+          <li>Calendar write actions</li>
+          <li>Slack &amp; Outlook connectors</li>
+          <li>Priority model routing</li>
+        </ul>
+        <p class="note">~60% gross margin. Overage voice sold at cost + margin.</p>
+      </div>
+    </div>
+    <div class="two-col" style="gap:36px;margin-top:22px">
+      <p class="body-text" style="font-size:17px"><strong style="color:var(--gold)">Why $12 and not $30.</strong> This is a consumer subscription competing for the same wallet slot as a streaming service, not an enterprise seat. Price low enough to be an impulse, keep margin by controlling cost per user at the infrastructure layer.</p>
+      <p class="body-text" style="font-size:17px"><strong style="color:var(--gold)">Why not usage-based on everything.</strong> Metering the thing users do constantly makes them use it less, which kills the habit the entire product depends on. We meter only the one workload where cost scales linearly with time spoken.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 11 · TRACTION ══════════ -->
+<section class="slide" id="s11">
+  <div class="aura aura-gold" style="bottom:-180px;left:-120px;opacity:.4"></div>
+  <div class="pad">
+    <span class="eyebrow">12 · Traction</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:8px">Early. Stated plainly.</h2>
+    <p class="body-text" style="max-width:720px;margin-bottom:24px">We are pre-revenue. What we have instead is a working product, primary research from the exact user we are building for, and a small beta cohort using it against their real mailboxes.</p>
+    <div class="three-col" style="margin-bottom:24px">
+      <div class="stat"><div class="val">3</div><div class="lbl">Beta users running EVE against live Gmail accounts in staging</div></div>
+      <div class="stat"><div class="val">12+</div><div class="lbl">In-depth interviews with working professionals, conducted by the founder</div></div>
+      <div class="stat"><div class="val">14</div><div class="lbl">Automated backend test suites, green in CI on every commit</div></div>
+    </div>
+    <div class="two-col" style="gap:36px;align-items:start">
+      <div>
+        <p class="eyebrow">WHAT THE INTERVIEWS TOLD US</p>
+        <div class="quote-lg" style="font-size:20px;margin-bottom:16px">
+          <p style="font-family:'Cormorant Garamond',serif;font-style:italic;font-size:22px;line-height:1.4;color:var(--text);margin-bottom:8px">&ldquo;I spend the first two hours of every morning just figuring out what I&rsquo;m supposed to do, before I do any actual work.&rdquo;</p>
+          <p class="src">Recurring theme across every professional interviewed</p>
+        </div>
+        <p class="note">Three findings held across every conversation: people do not want a smarter inbox, they want to stop <em>being</em> the process that decides what matters; they will not configure anything; and they will uninstall an app that interrupts them wrongly twice. That is why EVE speaks first, needs no setup, and shipped the consent gate before it shipped features.</p>
+      </div>
+      <div>
+        <p class="eyebrow">WHAT WE ARE MEASURING NEXT · 90 DAYS</p>
+        <table class="ledger">
+          <tbody>
+            <tr><td>Beta cohort size</td><td class="n">3 → 100</td></tr>
+            <tr><td>Push acceptance rate<br><span class="src">pushes acted on / pushes sent</span></td><td class="n">&gt; 60%</td></tr>
+            <tr><td>Mute-or-uninstall rate after first push</td><td class="n">&lt; 10%</td></tr>
+            <tr><td>D30 retention</td><td class="n">&gt; 40%</td></tr>
+            <tr><td>Free → Pro conversion</td><td class="n">&gt; 4%</td></tr>
+          </tbody>
+        </table>
+        <p class="note" style="margin-top:12px">Push acceptance is the metric this company lives or dies on. If a proactive agent interrupts you correctly, nothing else needs to be excellent. If it does not, nothing else can save it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 12 · ROADMAP ══════════ -->
+<section class="slide" id="s12">
+  <div class="grid"></div>
+  <div class="pad">
+    <span class="eyebrow">13 · Roadmap</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:22px">What this money buys,<br>quarter by quarter.</h2>
+    <div class="tl">
+      <div class="tlitem">
+        <div class="tlweek">MONTHS 0–3</div>
+        <div class="tltext"><strong style="color:var(--text)">Get out of staging.</strong> Public beta on both app stores. Accessibility pass: full VoiceOver/TalkBack labelling and complete hands-free operation. Move urgency scoring to the fast tier and enforce the per-user daily cost ceiling in code. Instrument push acceptance from day one. <span class="tag tg">100 beta users</span></div>
+      </div>
+      <div class="tlitem">
+        <div class="tlweek">MONTHS 4–6</div>
+        <div class="tltext"><strong style="color:var(--text)">Turn on revenue.</strong> Billing, Free/Pro/Power tiers live, voice metering enforced. Versioned memory graph replaces the flat fact store. Calendar write actions. <span class="tag to">first paying cohort · D30 &gt; 40%</span></div>
+      </div>
+      <div class="tlitem">
+        <div class="tlweek">MONTHS 7–12</div>
+        <div class="tltext"><strong style="color:var(--text)">Compound.</strong> Fixed-size context assembly: cost per call stops growing with history. Slack and Outlook connectors. Referral loop and content engine as the primary acquisition channel. <span class="tag ti">~1,200 paying users</span></div>
+      </div>
+      <div class="tlitem">
+        <div class="tlweek">MONTHS 13–18</div>
+        <div class="tltext"><strong style="color:var(--text)">Prove the shape of a seed round.</strong> Second surface beyond email and calendar. Accessibility positioning taken to market properly, including partnerships. Cohort data across four quarters. <span class="tag tc">~4,000 paying users · ~$48K MRR</span></div>
+      </div>
+    </div>
+    <p class="note" style="margin-top:20px">Adjacent markets we can see but are deliberately not claiming yet: <strong style="color:var(--text)">accessibility</strong> is the nearest: hands-free phone operation is a by-product of what already works, and it is on this roadmap. <strong style="color:var(--text)">Elder care</strong> and <strong style="color:var(--text)">children's learning</strong> need a deterministic, ungated reminder path and a full consent-and-compliance build respectively. Both are real. Neither is funded by this round, and we would rather say so.</p>
+  </div>
+</section>
+
+<!-- ══════════ 13 · TEAM ══════════ -->
+<section class="slide" id="s13">
+  <div class="aura aura-indigo" style="top:-60px;right:-80px;opacity:.6"></div>
+  <div class="pad">
+    <span class="eyebrow">14 · Team</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:22px">One builder. Working software.</h2>
+    <div class="two-col" style="gap:44px;align-items:start">
+      <div>
+        <div class="card card-g">
+          <h4 style="color:var(--gold);font-family:'DM Mono',monospace;font-size:13px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px">Founder &amp; CEO</h4>
+          <p style="font-family:'Cormorant Garamond',serif;font-size:30px;color:var(--text);margin-bottom:2px">Rosnel Kana</p>
+          <p class="src" style="margin-bottom:14px">Douala, Cameroon · linkedin.com/in/rosnelkana · github.com/Silent-bat</p>
+          <p class="body-text" style="font-size:17px">Fullstack engineer, 6+ years building web and AI-driven systems. Former Technical Development Manager at Next Venture Tech. Built every part of EVE solo: mobile app, backend, voice pipeline, consent engine, test suite and CI. Everything an investor can click on in this deck was written by one person, which is the clearest signal available at this stage about capital efficiency.</p>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:14px">
+            <span class="tag ti">React Native</span><span class="tag ti">TypeScript</span><span class="tag ti">Node</span>
+            <span class="tag ti">PostgreSQL</span><span class="tag ti">LLM streaming</span><span class="tag ti">System architecture</span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <p class="eyebrow">SHIPPING RECORD BEFORE EVE</p>
+        <div class="card card-t" style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <h4 style="margin:0;font-family:'DM Mono',monospace;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--teal)">EduFlowAI</h4>
+            <span class="tag tg">LIVE</span>
+          </div>
+          <p style="font-size:15.5px;color:rgba(232,237,242,.7);line-height:1.6">AI-powered school ERP platform, 500+ active users. End-to-end: product design, backend, mobile app, deployment.</p>
+        </div>
+        <div class="card card-i" style="margin-bottom:18px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <h4 style="margin:0;font-family:'DM Mono',monospace;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--indigo)">SecureWatch</h4>
+            <span class="tag ti">IN PROGRESS</span>
+          </div>
+          <p style="font-size:15.5px;color:rgba(232,237,242,.7);line-height:1.6">Blockchain authentication for luxury watches: smart-contract service layer, provenance history, fractional ownership.</p>
+        </div>
+        <p class="eyebrow">HONEST GAPS</p>
+        <p class="body-text" style="font-size:17px">No co-founder, no advisors, no distribution hire. The first two roles this round funds are a <strong style="color:var(--text)">growth lead</strong> and a <strong style="color:var(--text)">senior mobile engineer</strong>, and the first thing we want from an investor is help finding the former. A solo founder does not reach 4,000 paying users alone, and we are not going to pretend otherwise.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 14 · THE ASK ══════════ -->
+<section class="slide" id="s18">
+  <div class="grid"></div>
+  <div class="aura aura-indigo" style="bottom:-160px;right:-140px;opacity:.5"></div>
+  <div class="pad">
+    <span class="eyebrow">15 · Risks</span>
+    <h2 class="display" style="font-size:clamp(28px,4vw,46px);margin-bottom:8px">Four things could kill this.<br>Here is what we do about each.</h2>
+    <p class="body-text" style="max-width:780px;margin-bottom:22px">Ordered by how much damage they do, not by how comfortable they are to discuss.</p>
+    <div class="two-col" style="gap:18px;align-items:start;margin-bottom:18px">
+      <div class="card card-c">
+        <h4>Platform dependency <span class="tag tc" style="margin-left:6px">highest</span></h4>
+        <p style="margin-bottom:8px">Gmail is the only mail source, and one model family serves briefing, transcription and voice. A scope change, a policy review, a price rise or a deprecation lands directly on the product and on the $0.07/day cost floor.</p>
+        <p style="color:rgba(232,237,242,.7)"><strong style="color:var(--teal);font-weight:500">Mitigation.</strong> The provider sits behind one adapter, so a second model family is a swap and not a rewrite; Outlook is already on the roadmap to remove single-mailbox dependency; unit economics are recomputed at every price change and the tiers carry roughly 60–70% margin of headroom.</p>
+      </div>
+      <div class="card card-c">
+        <h4>Interruption trust <span class="tag tc" style="margin-left:6px">product-defining</span></h4>
+        <p style="margin-bottom:8px">Speaking first is the whole thesis and also the fastest way to be uninstalled. A handful of badly-timed pushes and the user turns notifications off, which reduces EVE to another chat app.</p>
+        <p style="color:rgba(232,237,242,.7)"><strong style="color:var(--teal);font-weight:500">Mitigation.</strong> The consent gate is deterministic and testable rather than model-decided, so a wrong interruption is a reproducible bug with a fix. Quiet hours, per-category opt-in and a conservative default threshold ship before the push behaviour widens. This is the metric the beta exists to measure.</p>
+      </div>
+    </div>
+    <div class="two-col" style="gap:18px;align-items:start;margin-bottom:18px">
+      <div class="card card-g">
+        <h4>Two unbuilt bets <span class="tag to" style="margin-left:6px">execution</span></h4>
+        <p style="margin-bottom:8px">Versioned memory and fixed-size context assembly are what make the assistant improve with use instead of drifting. Neither is built. If they turn out to be harder than scoped, the product is a good voice assistant without a compounding advantage.</p>
+        <p style="color:rgba(232,187,138,.85)"><strong style="color:var(--teal);font-weight:500">Mitigation.</strong> Both are presented as the funded bet of this round, not as shipped IP, and both are additive to a working product. The flat 200-fact store is adequate for the beta, so a slip delays the moat rather than blocking revenue.</p>
+      </div>
+      <div class="card card-g">
+        <h4>Solo founder <span class="tag to" style="margin-left:6px">concentration</span></h4>
+        <p style="margin-bottom:8px">One person currently holds product, backend, mobile and infrastructure. That is why the deck can claim a small surface area and low burn; it is also a single point of failure and a hard ceiling on parallel work.</p>
+        <p style="color:rgba(232,187,138,.85)"><strong style="color:var(--teal);font-weight:500">Mitigation.</strong> 40% of the round is engineering hire, first two roles being mobile and backend, which removes the ceiling before the paid launch. The codebase is documented, CI-gated and covered by 14 backend test suites specifically so it survives handover.</p>
+      </div>
+    </div>
+    <p class="note">Not listed because they are ordinary rather than existential: competitive entry by an incumbent (addressed on the competitive-position slide), app-store review risk for a background-audio app, and voice-minute abuse on the unlimited-feeling tiers, which is bounded by the per-tier minute allowance and metered overage.</p>
+  </div>
+</section>
+
+<section class="slide" id="s14">
+  <div class="grid"></div>
+  <div class="aura aura-gold" style="top:-120px;right:-100px;opacity:.55"></div>
+  <div class="pad">
+    <span class="eyebrow">16 · The ask</span>
+    <div class="two-col" style="gap:48px;align-items:start">
+      <div>
+        <div class="ask-num">$750K</div>
+        <p style="font-family:'Cormorant Garamond',serif;font-size:24px;color:var(--text);margin-top:10px">Pre-seed · SAFE</p>
+        <table class="ledger" style="margin-top:20px">
+          <tbody>
+            <tr><td>Instrument</td><td class="n">SAFE, post-money</td></tr>
+            <tr><td>Target raise</td><td class="n">$500K–$1M</td></tr>
+            <tr><td>Valuation cap</td><td class="n">$6M post-money</td></tr>
+            <tr><td>Dilution at $750K</td><td class="n">12.5%</td></tr>
+            <tr class="sum"><td>Runway</td><td class="n">18–24 months</td></tr>
+          </tbody>
+        </table>
+        <p class="note" style="margin-top:12px">Sized to reach a seed-legible milestone (roughly 4,000 paying users and ~$48K MRR with four quarters of cohort data), not to reach profitability.</p>
+      </div>
+      <div>
+        <p class="eyebrow">USE OF FUNDS</p>
+        <div class="mbar">
+          <div class="mbar-label"><span>Engineering · 2 hires</span><span>40%</span></div>
+          <div class="mbar-track"><div class="mbar-fill" style="width:40%;background:linear-gradient(90deg,var(--gold-dk),var(--gold))"></div></div>
+        </div>
+        <div class="mbar">
+          <div class="mbar-label"><span>Infrastructure &amp; model inference</span><span>25%</span></div>
+          <div class="mbar-track"><div class="mbar-fill" style="width:25%;background:linear-gradient(90deg,#4A5599,var(--indigo))"></div></div>
+        </div>
+        <div class="mbar">
+          <div class="mbar-label"><span>Go-to-market &amp; growth lead</span><span>25%</span></div>
+          <div class="mbar-track"><div class="mbar-fill" style="width:25%;background:linear-gradient(90deg,#1F8C74,var(--teal))"></div></div>
+        </div>
+        <div class="mbar">
+          <div class="mbar-label"><span>Operations, legal &amp; compliance</span><span>10%</span></div>
+          <div class="mbar-track"><div class="mbar-fill" style="width:10%;background:linear-gradient(90deg,#99413F,var(--coral))"></div></div>
+        </div>
+        <hr class="thin">
+        <p class="eyebrow">WHAT WE WANT BESIDES MONEY</p>
+        <ul class="shiplist">
+          <li>Introductions to accessibility organisations: our nearest adjacent market and our best distribution story</li>
+          <li>An operator who has priced and retained a sub-$20 consumer subscription at scale</li>
+          <li>A design partner cohort of 20–50 inbox-heavy professionals</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 15 · CLOSING ══════════ -->
+<section class="slide" id="s15">
+  <div class="aura aura-gold" style="top:50%;left:50%;transform:translate(-50%,-50%);opacity:.4"></div>
+  <div class="pad" style="align-items:flex-start">
+    <p class="quote-lg" style="border-left-color:var(--gold)">Every assistant waits to be asked.<br>The useful one already knew.</p>
+    <p class="body-text" style="max-width:640px;margin-bottom:34px">EVE is live, tested, and honest about what is not built yet. We are raising a pre-seed to take it out of staging, turn on revenue, and prove that an agent can be trusted to speak first.</p>
+    <div style="display:flex;gap:44px;align-items:flex-end;flex-wrap:wrap">
+      <div>
+        <p class="eyebrow">CONTACT</p>
+        <p style="font-family:'Cormorant Garamond',serif;font-size:22px;color:var(--text)">Rosnel Kana</p>
+        <p style="font-family:'DM Mono',monospace;font-size:14.5px;color:var(--gold);margin-top:4px">kanarosnel007@gmail.com · +237 694 319 849</p>
+        <p style="font-family:'DM Mono',monospace;font-size:14.5px;color:var(--muted);margin-top:2px">linkedin.com/in/rosnelkana · github.com/Silent-bat · Douala, Cameroon</p>
+      </div>
+      <div class="cover-pills" style="margin:0">
+        <span class="pill">Live demo on request</span>
+        <span class="pill">Repository access under NDA</span>
+        <span class="pill">Data room ready</span>
+      </div>
+    </div>
+    <p class="src" style="margin-top:40px">All product claims in this deck describe code that exists in the repository today unless explicitly tagged as roadmap. Cost figures derive from published provider list prices observed 2026-08-13. Bottom-up market rows on slide&nbsp;9 are labelled assumptions, not measurements.</p>
+  </div>
+</section>
+
+</div><!-- /.deck -->
+
+<div class="nav">
+  <button class="arr" onclick="go(-1)" aria-label="Previous slide">&#8249;</button>
+  <span id="ctr" style="font-family:'DM Mono',monospace;font-size:13px;color:var(--muted);min-width:46px;text-align:center">1 / 18</span>
+  <button class="arr" onclick="go(1)" aria-label="Next slide">&#8250;</button>
+</div>
+
+<script>
+const slides = Array.from(document.querySelectorAll('.slide'));
+const total = slides.length;
+const dotsEl = document.getElementById('dots');
+let cur = 0;
+
+for (let i = 0; i < total; i++) {
+  const d = document.createElement('div');
+  d.className = 'dot' + (i === 0 ? ' on' : '');
+  d.addEventListener('click', () => goto(i));
+  dotsEl.appendChild(d);
+}
+
+function goto(n){
+  slides[cur].classList.remove('on');
+  dotsEl.children[cur].classList.remove('on');
+  cur = Math.max(0, Math.min(total - 1, n));
+  slides[cur].classList.add('on');
+  dotsEl.children[cur].classList.add('on');
+  document.getElementById('prog').style.width = ((cur + 1) / total * 100) + '%';
+  document.getElementById('lbl').textContent = String(cur + 1).padStart(2,'0') + ' / ' + String(total).padStart(2,'0');
+  document.getElementById('ctr').textContent = (cur + 1) + ' / ' + total;
+}
+function go(d){ goto(cur + d); }
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') { e.preventDefault(); go(1); }
+  if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   { e.preventDefault(); go(-1); }
+  if (e.key === 'Home') goto(0);
+  if (e.key === 'End')  goto(total - 1);
+});
+
+goto(0);
+</script>
+</body>
+</html>

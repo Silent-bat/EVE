@@ -704,7 +704,7 @@ function build(targetCount: number): OrbGeometry {
     // volume evenly would wash the dark centre out to uniform grey.
     const t = rnd();
     let shell: number;
-    if (t < 0.30) {
+    if (t < 0.3) {
       // Skin. Gives the crisp silhouette and carries the filaments.
       //
       // This is where the ring comes from, and it only works if the skin is
@@ -776,7 +776,7 @@ function build(targetCount: number): OrbGeometry {
       // Sits just inside the skin (0.938 start) so its silhouette reads as a
       // soft inner taper rather than a second ring. Kept bounded: the old volume
       // fill put an s^-1.077 integrand under the centre and spiked it to 170.
-      shell = 0.70 + rnd() * 0.236;
+      shell = 0.7 + rnd() * 0.236;
     } else if (t < 0.893) {
       // Mid shell. The inner shell above starts at 0.70, which projects to
       // r=148 px, so every one of its sub-shells covers the whole inner disc
@@ -784,7 +784,7 @@ function build(targetCount: number): OrbGeometry {
       // and r=150..200 already matches (76.6 against the reference's 76.5 at
       // r=150). This population tops out at 0.64, i.e. r=137 px, so it lands
       // only where the capture was short: 60-66 across r=30..80 against 66-69.
-      shell = 0.34 + rnd() * 0.30;
+      shell = 0.34 + rnd() * 0.3;
     } else if (t < 0.9045) {
       // Nucleus. The reference's centre bin reads 82.7 against 69/66/70 for the
       // three bins outside it, so the middle of the disc is not just the flat

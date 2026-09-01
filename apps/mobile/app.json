@@ -17,12 +17,13 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.eve.agent",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "EVE listens when you tap the mic so you can talk to your agent."
+        "NSMicrophoneUsageDescription": "EVE listens while voice mode is enabled so you can speak naturally."
       }
     },
     "android": {
       "package": "com.eve.agent",
       "permissions": ["RECORD_AUDIO"],
+      "usesCleartextTraffic": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#f3effa"

@@ -17,11 +17,15 @@ import { moduleLogger } from "../logger.mjs";
 import { httpError } from "../http/responses.mjs";
 import { save, state } from "../storage/index.mjs";
 import { sanitizePlainText } from "../briefing/scoring.mjs";
+import { boundedJSONValue } from "../briefing/prompt.mjs";
 import { sendPushToUser } from "./push.mjs";
 
 const log = moduleLogger("notifications.proactive");
 
 const INBOX_LIMIT = 200;
+// Thought metadata is shown in notifications and persisted with the inbox.
+// Keep provider/model supplied objects small and JSON-safe before either path.
+const MAX_THOUGHT_DATA_CHARS = 8_000;
 
 /**
  * Canonical proactive categories. Each one is independently opt-in with its
@@ -126,8 +130,33 @@ export function defaultProactivePrefs() {
  * @returns {ProactivePrefs}
  */
 export function normalizeProactivePrefs(input, current) {
-  const base = current ?? defaultProactivePrefs();
-  if (!input || typeof input !== "object") return base;
+  const defaults = defaultProactivePrefs();
+  const rawBase = /** @type {Record<string, any>} */ (
+    current && typeof current === "object" && !Array.isArray(current) ? current : defaults
+  );
+  const baseCategories = /** @type {Record<string, any>} */ (
+    rawBase.categories && typeof rawBase.categories === "object" && !Array.isArray(rawBase.categories)
+      ? rawBase.categories
+      : {}
+  );
+  /** @type {ProactivePrefs} */
+  const base = {
+    enabled: typeof rawBase.enabled === "boolean" ? rawBase.enabled : defaults.enabled,
+    quietHoursStart: validHHMM(rawBase.quietHoursStart) ? rawBase.quietHoursStart : defaults.quietHoursStart,
+    quietHoursEnd: validHHMM(rawBase.quietHoursEnd) ? rawBase.quietHoursEnd : defaults.quietHoursEnd,
+    maxPushesPerDay: clampInt(rawBase.maxPushesPerDay, 0, 50, defaults.maxPushesPerDay),
+    maxPushesPerHour: clampInt(rawBase.maxPushesPerHour, 0, 10, defaults.maxPushesPerHour),
+    categories: /** @type {ProactivePrefs["categories"]} */ (
+      Object.fromEntries(
+        PROACTIVE_CATEGORIES.map((name) => [
+          name,
+          normalizeCategoryPrefs(baseCategories[name], defaults.categories[name]),
+        ]),
+      )
+    ),
+    availableNow: normalizeAvailableNow(rawBase.availableNow, defaults.availableNow),
+  };
+  if (!input || typeof input !== "object" || Array.isArray(input)) return base;
 
   /** @type {ProactivePrefs} */
   const next = {
@@ -140,7 +169,7 @@ export function normalizeProactivePrefs(input, current) {
     availableNow: normalizeAvailableNow(input.availableNow, base.availableNow),
   };
 
-  if (input.categories && typeof input.categories === "object") {
+  if (input.categories && typeof input.categories === "object" && !Array.isArray(input.categories)) {
     for (const name of PROACTIVE_CATEGORIES) {
       const incoming = /** @type {any} */ (input.categories)[name];
       if (!incoming || typeof incoming !== "object") continue;
@@ -167,9 +196,7 @@ function normalizeAvailableNow(input, current) {
   const obj = /** @type {Record<string, unknown>} */ (input);
   const until = typeof obj.until === "string" ? Date.parse(obj.until) : NaN;
   if (Number.isNaN(until) || until <= Date.now()) return null;
-  const cats = Array.isArray(obj.categories)
-    ? obj.categories.filter((c) => isCategory(c))
-    : [];
+  const cats = Array.isArray(obj.categories) ? obj.categories.filter((c) => isCategory(c)) : [];
   return {
     until: new Date(until).toISOString(),
     categories: /** @type {ProactiveCategory[]} */ (cats),
@@ -202,6 +229,9 @@ export function getProactivePrefs(userID) {
 export function appendThought(userID, input) {
   const user = state.users[userID];
   if (!user) throw httpError(404, "user not found");
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw httpError(400, "thought must be an object");
+  }
   if (!isCategory(input.category)) throw httpError(400, `unknown category: ${input.category}`);
   const title = sanitizePlainText(input.title, 240);
   const body = sanitizePlainText(input.body, 2000);
@@ -215,7 +245,7 @@ export function appendThought(userID, input) {
     urgency: isUrgency(input.urgency) ? input.urgency : "medium",
     title,
     body,
-    data: (input.data && typeof input.data === "object" ? input.data : {}) || {},
+    data: normalizeThoughtData(input.data),
     createdAt: new Date().toISOString(),
     status: "new",
     pushed: false,
@@ -241,12 +271,16 @@ export function appendThought(userID, input) {
  */
 export function listThoughts(userID, opts = {}) {
   const list = /** @type {Thought[]} */ (state.users[userID]?.proactiveInbox || []);
-  const limit = Math.min(INBOX_LIMIT, Math.max(1, opts.limit || 50));
+  const options = opts && typeof opts === "object" && !Array.isArray(opts) ? opts : {};
+  const requestedLimit = Number(options.limit);
+  const limit = Number.isSafeInteger(requestedLimit)
+    ? Math.min(INBOX_LIMIT, Math.max(1, requestedLimit))
+    : 50;
   /** @type {Thought[]} */
   let out = list;
-  if (opts.status) out = out.filter((t) => t.status === opts.status);
-  if (opts.since) {
-    const cutoff = Date.parse(opts.since);
+  if (options.status) out = out.filter((t) => t.status === options.status);
+  if (options.since) {
+    const cutoff = Date.parse(options.since);
     if (!Number.isNaN(cutoff)) out = out.filter((t) => Date.parse(t.createdAt) > cutoff);
   }
   return out.slice(0, limit);
@@ -264,15 +298,16 @@ export function markThought(userID, thoughtID, patch) {
   const list = /** @type {Thought[]} */ (state.users[userID]?.proactiveInbox || []);
   const thought = list.find((t) => t.id === thoughtID);
   if (!thought) throw httpError(404, "thought not found");
-  if (patch.status && ["new", "seen", "dismissed", "acted_on"].includes(patch.status)) {
-    thought.status = patch.status;
+  const safePatch = patch && typeof patch === "object" && !Array.isArray(patch) ? patch : {};
+  if (safePatch.status && ["new", "seen", "dismissed", "acted_on"].includes(safePatch.status)) {
+    thought.status = safePatch.status;
   }
-  if (patch.feedback !== undefined) {
-    if (patch.feedback === null) {
+  if (safePatch.feedback !== undefined) {
+    if (safePatch.feedback === null) {
       thought.feedback = null;
       thought.feedbackAt = null;
-    } else if (["helpful", "not_now", "never_again"].includes(patch.feedback)) {
-      thought.feedback = patch.feedback;
+    } else if (["helpful", "not_now", "never_again"].includes(safePatch.feedback)) {
+      thought.feedback = safePatch.feedback;
       thought.feedbackAt = new Date().toISOString();
     }
   }
@@ -357,14 +392,17 @@ export async function dispatchProactive(userID, input, opts = {}) {
   const timezone = user.preferences?.timezone || "UTC";
   const recent = collectRecentPushes(user.proactiveInbox || [], now);
 
-  const decision = shouldPush({
-    prefs,
-    thought: { category: thought.category, urgency: thought.urgency },
-    recentPushTimestamps: recent,
-    now,
-    timezone,
-    hasPushTokens,
-  });
+  const decision =
+    user.preferences?.pushEnabled === false
+      ? { allow: false, reason: "push_disabled" }
+      : shouldPush({
+          prefs,
+          thought: { category: thought.category, urgency: thought.urgency },
+          recentPushTimestamps: recent,
+          now,
+          timezone,
+          hasPushTokens,
+        });
 
   if (!decision.allow) {
     thought.pushSuppressedReason = decision.reason;
@@ -434,7 +472,8 @@ export function isAvailableNowActive(window, category, now) {
   if (!window) return false;
   const until = Date.parse(window.until);
   if (Number.isNaN(until) || until <= now.getTime()) return false;
-  if (window.categories.length && !window.categories.includes(category)) return false;
+  if (Array.isArray(window.categories) && window.categories.length && !window.categories.includes(category))
+    return false;
   return true;
 }
 
@@ -450,7 +489,7 @@ function collectRecentPushes(inbox, now) {
   const cutoff = now.getTime() - 24 * 60 * 60 * 1000;
   /** @type {string[]} */
   const out = [];
-  for (const t of inbox) {
+  for (const t of Array.isArray(inbox) ? inbox : []) {
     if (!t.pushedAt) continue;
     const ts = Date.parse(t.pushedAt);
     if (Number.isNaN(ts) || ts < cutoff) continue;
@@ -530,6 +569,38 @@ function clampInt(value, min, max, fallback) {
   const n = typeof value === "number" ? Math.floor(value) : Number.NaN;
   if (Number.isNaN(n)) return fallback;
   return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * Normalize one category against a known-good fallback. Persisted preference
+ * objects can predate the current schema or be partially corrupted.
+ *
+ * @param {unknown} value
+ * @param {CategoryPrefs} fallback
+ * @returns {CategoryPrefs}
+ */
+function normalizeCategoryPrefs(value, fallback) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ...fallback };
+  const candidate = /** @type {Record<string, unknown>} */ (value);
+  return {
+    enabled: typeof candidate.enabled === "boolean" ? candidate.enabled : fallback.enabled,
+    threshold: isUrgency(candidate.threshold) ? candidate.threshold : fallback.threshold,
+    deliveryMode: isDeliveryMode(candidate.deliveryMode) ? candidate.deliveryMode : fallback.deliveryMode,
+  };
+}
+
+/** @param {unknown} value @returns {Record<string, unknown>} */
+function normalizeThoughtData(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const bounded = boundedJSONValue(value, MAX_THOUGHT_DATA_CHARS);
+  // Reparse the bounded representation so getters, prototypes, and cyclic
+  // references cannot survive into persistence or the push payload.
+  try {
+    const parsed = JSON.parse(JSON.stringify(bounded));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 /**

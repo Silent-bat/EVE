@@ -1,7 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { addMinutes, atTime, dayKey, timeKey } from "../src/utils/dates.mjs";
+import {
+  addMinutes,
+  atLocalDateInZone,
+  atTime,
+  atTimeInZone,
+  dayKey,
+  dayKeyInZone,
+  startOfDayInZone,
+  startOfNextDayInZone,
+  timeKey,
+  timeKeyInZone,
+  zonedParts,
+} from "../src/utils/dates.mjs";
 
 test("dayKey formats as YYYY-MM-DD with zero padding", () => {
   assert.equal(dayKey(new Date(2026, 0, 3)), "2026-01-03");
@@ -35,4 +47,49 @@ test("addMinutes shifts a date forward", () => {
   const next = addMinutes(base, 75);
   assert.equal(next.getHours(), 1);
   assert.equal(next.getMinutes(), 15);
+});
+
+test("zone helpers preserve the user's wall clock instead of applying the offset backwards", () => {
+  const reference = new Date("2024-06-01T12:00:00.000Z");
+  const result = atTimeInZone(reference, 8, 5, "America/New_York");
+  assert.equal(result.toISOString(), "2024-06-01T12:05:00.000Z");
+  assert.deepEqual(zonedParts(result, "America/New_York"), {
+    year: 2024,
+    month: 6,
+    day: 1,
+    hour: 8,
+    minute: 5,
+    second: 0,
+  });
+  assert.equal(dayKeyInZone(result, "America/New_York"), "2024-06-01");
+  assert.equal(timeKeyInZone(result, "America/New_York"), "08:05");
+});
+
+test("zone day bounds follow 23- and 25-hour DST days", () => {
+  const spring = new Date("2024-03-10T12:00:00.000Z");
+  const springStart = startOfDayInZone(spring, "America/New_York");
+  const springEnd = startOfNextDayInZone(spring, "America/New_York");
+  assert.equal(springStart.toISOString(), "2024-03-10T05:00:00.000Z");
+  assert.equal(springEnd.toISOString(), "2024-03-11T04:00:00.000Z");
+  assert.equal(springEnd.getTime() - springStart.getTime(), 23 * 60 * 60 * 1000);
+
+  const autumn = new Date("2024-11-03T12:00:00.000Z");
+  const autumnStart = startOfDayInZone(autumn, "America/New_York");
+  const autumnEnd = startOfNextDayInZone(autumn, "America/New_York");
+  assert.equal(autumnStart.toISOString(), "2024-11-03T04:00:00.000Z");
+  assert.equal(autumnEnd.toISOString(), "2024-11-04T05:00:00.000Z");
+  assert.equal(autumnEnd.getTime() - autumnStart.getTime(), 25 * 60 * 60 * 1000);
+});
+
+test("all-day calendar dates are interpreted in the user's zone", () => {
+  const result = atLocalDateInZone("2024-06-01", 0, 0, "America/New_York");
+  assert.equal(result.toISOString(), "2024-06-01T04:00:00.000Z");
+  assert.deepEqual(zonedParts(result, "America/New_York"), {
+    year: 2024,
+    month: 6,
+    day: 1,
+    hour: 0,
+    minute: 0,
+    second: 0,
+  });
 });

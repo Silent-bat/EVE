@@ -4,7 +4,7 @@
  * A three-option segment told you the names of the themes but not what they
  * looked like, which is the one thing a theme picker is for. Each option here
  * carries a miniature of the page it produces — background, card, text, and
- * EVE's purple — drawn from the real palettes, so switching is a choice you
+ * the active accent — drawn from the real palettes, so switching is a choice you
  * make by looking rather than by trying.
  *
  * "System" shows both halves, because that is honestly what it gives you: the
@@ -16,20 +16,8 @@ import { StyleSheet, Text, View } from "react-native";
 import { SettingsGroup, SettingsRowItem } from "../rows";
 import { SettingsPage } from "../PageShell";
 import { PressableScale } from "../../ui/motion";
-import {
-  darkPalette,
-  elevation,
-  lightPalette,
-  radius,
-  spacing,
-  type Palette,
-} from "../../ui/theme";
-import {
-  useTheme,
-  useThemedStyles,
-  type AppearancePreference,
-  type ThemeValue,
-} from "../../ui/ThemeContext";
+import { darkPalette, elevation, lightPalette, radius, spacing, type Palette } from "../../ui/theme";
+import { useTheme, useThemedStyles, type AppearancePreference, type ThemeValue } from "../../ui/ThemeContext";
 
 type Option = {
   value: AppearancePreference;
@@ -48,14 +36,14 @@ const OPTIONS: Option[] = [
   },
   {
     value: "light",
-    label: "Lavender",
-    description: "Soft light background, white cards",
+    label: "White",
+    description: "Pure white background with black controls",
     swatches: [lightPalette],
   },
   {
     value: "dark",
-    label: "Midnight",
-    description: "Deep plum, easier on the eyes after dark",
+    label: "Black",
+    description: "Pure black background with white controls",
     swatches: [darkPalette],
   },
 ];
@@ -81,10 +69,7 @@ export function AppearancePage({ onBack }: { onBack: () => void }) {
               accessibilityState={{ selected }}
               accessibilityLabel={option.label}
               accessibilityHint={option.description}
-              style={[
-                styles.option,
-                selected ? { borderColor: palette.ambient, borderWidth: 2 } : null,
-              ]}
+              style={[styles.option, selected ? { borderColor: palette.ambient, borderWidth: 2 } : null]}
             >
               <View style={styles.swatchRow}>
                 {option.swatches.map((swatch, index) => (
@@ -105,9 +90,7 @@ export function AppearancePage({ onBack }: { onBack: () => void }) {
                     : { borderColor: palette.borderStrong },
                 ]}
               >
-                {selected ? (
-                  <Ionicons name="checkmark" size={14} color={palette.textInverse} />
-                ) : null}
+                {selected ? <Ionicons name="checkmark" size={14} color={palette.textInverse} /> : null}
               </View>
             </PressableScale>
           );
