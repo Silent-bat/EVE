@@ -71,41 +71,49 @@ for browsers needs a short-lived WebSocket ticket or an HttpOnly-cookie handshak
 
 The API uses zod to validate `process.env` at boot. Set these in `.env`:
 
-| Variable                             | Required   | Default       | Notes                                                                                                        |
-| ------------------------------------ | ---------- | ------------- | ------------------------------------------------------------------------------------------------------------ |
-| `NODE_ENV`                           | no         | `development` | `production` enables HSTS + harder error responses                                                           |
-| `API_HOST`                           | no         | `127.0.0.1`   | Use `0.0.0.0` to accept LAN connections                                                                      |
-| `API_PORT`                           | no         | `8080`        |                                                                                                              |
-| `EVE_DATA_DIR`                       | no         | `.eve-data`   | JSON state path when `DATABASE_URL` is unset                                                                 |
-| `AUTH_TOKEN_TTL_DAYS`                | no         | `30`          | Session token lifetime                                                                                       |
-| `LOG_LEVEL`                          | no         | `info`        | pino level — `silent` for tests                                                                              |
-| `DATABASE_URL`                       | production | —             | Postgres connection string; development/test may leave it blank for the JSON fallback                        |
-| `CORS_ORIGINS`                       | no         | —             | Comma-separated browser origins; production denies cross-origin browser access when blank                    |
-| `GOOGLE_CLIENT_ID`                   | optional   | —             | Web OAuth client (`/v1/google/*` flows). Requires `GOOGLE_CLIENT_SECRET` and `GOOGLE_REDIRECT_URI` together. |
-| `GOOGLE_CLIENT_SECRET`               | with web   | —             |                                                                                                              |
-| `GOOGLE_ANDROID_CLIENT_ID`           | optional   | —             | Used by mobile native sign-in                                                                                |
-| `GOOGLE_REDIRECT_URI`                | with web   | —             | Must match the URI registered in Google Cloud                                                                |
-| `GEMINI_API_KEY`                     | optional   | —             | When set, briefing + assistant use Gemini; otherwise local fallback                                          |
-| `ANTHROPIC_API_KEY`                  | optional   | —             | Reserved (not yet wired)                                                                                     |
-| `AUTH_RATELIMIT_IP_PER_MIN`          | no         | `5`           | `429` after this many `/v1/auth/*` requests per minute per IP                                                |
-| `AUTH_RATELIMIT_EMAIL_PER_15MIN`     | no         | `20`          | `429` after this many per email per 15min                                                                    |
-| `OUTBOUND_TIMEOUT_MS`                | no         | `15000`       | Timeout for Google/Gemini/Expo network calls (milliseconds)                                                  |
-| `DATABASE_CONNECT_TIMEOUT_MS`        | no         | `10000`       | Postgres connection acquisition timeout (milliseconds)                                                       |
-| `DATABASE_STATEMENT_TIMEOUT_MS`      | no         | `15000`       | Postgres statement timeout (milliseconds)                                                                    |
-| `DATABASE_SSL_REJECT_UNAUTHORIZED`   | no         | `true`        | Verify remote Postgres certificates; the bundled local `postgres` host uses plaintext                        |
-| `GOOGLE_RESPONSE_MAX_BYTES`          | no         | `2000000`     | Maximum bytes accepted from a Google JSON response                                                           |
-| `GMAIL_MAX_BODY_CHARS`               | no         | `20000`       | Maximum characters retained from one Gmail body/snippet                                                      |
-| `GMAIL_FETCH_CONCURRENCY`            | no         | `6`           | Maximum concurrent Gmail detail requests per operation                                                       |
-| `GEMINI_PROMPT_MAX_CHARS`            | no         | `120000`      | Maximum characters sent in one Gemini prompt                                                                 |
-| `DEVICE_NOTIFICATION_RETENTION_DAYS` | no         | `30`          | Days captured notification previews remain available                                                         |
-| `STATE_ENCRYPTION_KEY`               | production | —             | Required secret used to encrypt stored Google credentials                                                    |
-| `USER_RATELIMIT_PER_MIN`             | no         | `30`          | Per-user budget for each billable AI/Gmail route per minute                                                  |
-| `VOICE_MAX_CONNECTIONS_PER_USER`     | no         | `2`           | Concurrent authenticated Live voice sockets per user                                                         |
-| `VOICE_MAX_AUDIO_BYTES`              | no         | `2000000`     | Cumulative inbound Live audio quota per turn/session budget                                                  |
-| `VOICE_MAX_SESSION_MS`               | no         | `900000`      | Maximum Live voice session length (milliseconds)                                                             |
-| `VOICE_IDLE_TIMEOUT_MS`              | no         | `600000`      | Close an inactive Live socket after this period (milliseconds)                                               |
+| Variable                             | Required   | Default        | Notes                                                                                                        |
+| ------------------------------------ | ---------- | -------------- | ------------------------------------------------------------------------------------------------------------ |
+| `NODE_ENV`                           | no         | `development`  | `production` enables HSTS + harder error responses                                                           |
+| `API_HOST`                           | no         | `127.0.0.1`    | Use `0.0.0.0` to accept LAN connections                                                                      |
+| `API_PORT`                           | no         | `8080`         |                                                                                                              |
+| `EVE_DATA_DIR`                       | no         | `.eve-data`    | JSON state path when `DATABASE_URL` is unset                                                                 |
+| `AUTH_TOKEN_TTL_DAYS`                | no         | `30`           | Session token lifetime                                                                                       |
+| `LOG_LEVEL`                          | no         | `info`         | pino level — `silent` for tests                                                                              |
+| `DATABASE_URL`                       | production | —              | Postgres connection string; development/test may leave it blank for the JSON fallback                        |
+| `CORS_ORIGINS`                       | no         | —              | Comma-separated browser origins; production denies cross-origin browser access when blank                    |
+| `GOOGLE_CLIENT_ID`                   | optional   | —              | Web OAuth client (`/v1/google/*` flows). Requires `GOOGLE_CLIENT_SECRET` and `GOOGLE_REDIRECT_URI` together. |
+| `GOOGLE_CLIENT_SECRET`               | with web   | —              |                                                                                                              |
+| `GOOGLE_ANDROID_CLIENT_ID`           | optional   | —              | Used by mobile native sign-in                                                                                |
+| `GOOGLE_REDIRECT_URI`                | with web   | —              | Must match the URI registered in Google Cloud                                                                |
+| `EXPO_PUBLIC_GOOGLE_WEB_RETURN_URL`  | no         | current origin | Optional browser callback override; production should use the deployed EVE HTTPS URL                         |
+| `GEMINI_API_KEY`                     | optional   | —              | When set, briefing + assistant use Gemini; otherwise local fallback                                          |
+| `ANTHROPIC_API_KEY`                  | optional   | —              | Reserved (not yet wired)                                                                                     |
+| `AUTH_RATELIMIT_IP_PER_MIN`          | no         | `5`            | `429` after this many `/v1/auth/*` requests per minute per IP                                                |
+| `AUTH_RATELIMIT_EMAIL_PER_15MIN`     | no         | `20`           | `429` after this many per email per 15min                                                                    |
+| `OUTBOUND_TIMEOUT_MS`                | no         | `15000`        | Timeout for Google/Gemini/Expo network calls (milliseconds)                                                  |
+| `DATABASE_CONNECT_TIMEOUT_MS`        | no         | `10000`        | Postgres connection acquisition timeout (milliseconds)                                                       |
+| `DATABASE_STATEMENT_TIMEOUT_MS`      | no         | `15000`        | Postgres statement timeout (milliseconds)                                                                    |
+| `DATABASE_SSL_REJECT_UNAUTHORIZED`   | no         | `true`         | Verify remote Postgres certificates; the bundled local `postgres` host uses plaintext                        |
+| `GOOGLE_RESPONSE_MAX_BYTES`          | no         | `2000000`      | Maximum bytes accepted from a Google JSON response                                                           |
+| `GMAIL_MAX_BODY_CHARS`               | no         | `20000`        | Maximum characters retained from one Gmail body/snippet                                                      |
+| `GMAIL_FETCH_CONCURRENCY`            | no         | `6`            | Maximum concurrent Gmail detail requests per operation                                                       |
+| `GEMINI_PROMPT_MAX_CHARS`            | no         | `120000`       | Maximum characters sent in one Gemini prompt                                                                 |
+| `DEVICE_NOTIFICATION_RETENTION_DAYS` | no         | `30`           | Days captured notification previews remain available                                                         |
+| `STATE_ENCRYPTION_KEY`               | production | —              | Required secret used to encrypt stored Google credentials                                                    |
+| `USER_RATELIMIT_PER_MIN`             | no         | `30`           | Per-user budget for each billable AI/Gmail route per minute                                                  |
+| `VOICE_MAX_CONNECTIONS_PER_USER`     | no         | `2`            | Concurrent authenticated Live voice sockets per user                                                         |
+| `VOICE_MAX_AUDIO_BYTES`              | no         | `2000000`      | Cumulative inbound Live audio quota per turn/session budget                                                  |
+| `VOICE_MAX_SESSION_MS`               | no         | `900000`       | Maximum Live voice session length (milliseconds)                                                             |
+| `VOICE_IDLE_TIMEOUT_MS`              | no         | `600000`       | Close an inactive Live socket after this period (milliseconds)                                               |
 
 Password inputs are capped at 256 characters before scrypt work begins.
+
+For Android browser-fallback development, `GOOGLE_REDIRECT_URI` may be the API
+callback on `localhost`, but the connected phone must have
+`adb reverse tcp:8080 tcp:8080` active. A preview/production APK instead needs
+an HTTPS API: set both `EXPO_PUBLIC_EVE_API_URL` and `GOOGLE_REDIRECT_URI` to
+that deployment, register the callback exactly in Google Cloud, and include the
+deployed web origin in `CORS_ORIGINS` when browser login is enabled.
 
 ## API endpoints
 

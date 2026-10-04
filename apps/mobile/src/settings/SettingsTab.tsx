@@ -16,7 +16,7 @@
  * cost more than it explains.
  */
 import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, BackHandler, StyleSheet, Text, View } from "react-native";
 
 import type { DeviceNotification, Preferences, ProactiveCategoryName, Session } from "../types";
@@ -31,6 +31,7 @@ import { useTheme, useThemedStyles, type AppearancePreference, type ThemeValue }
 import { SettingsGroup, SettingsRowItem, SettingsSwitch } from "./rows";
 import { AccountPage } from "./pages/AccountPage";
 import { AppearancePage } from "./pages/AppearancePage";
+import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { CapturedPage } from "./pages/CapturedPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { ProactiveCategoryPage, ProactivePage } from "./pages/ProactivePage";
@@ -50,6 +51,7 @@ type Page =
   | { name: "proactiveCategory"; category: ProactiveCategoryName }
   | { name: "notifications" }
   | { name: "captured" }
+  | { name: "integrations" }
   | { name: "appearance" }
   | { name: "account" };
 
@@ -157,8 +159,18 @@ export function SettingsTab({
   // Appearance from the drawer after having been in Settings has to move, not
   // silently land on whatever page was left open. Resets the stack rather than
   // pushing, so Back from a deep-linked page returns to the index.
+  //
+  // CRITICAL: only re-sync when `entry` ACTUALLY changes. `onNavigate` is an
+  // inline callback from the parent, so its identity changes on every parent
+  // re-render (frequent: the always-listening voice + the 30s poll). Keying the
+  // reset on it would rebuild the stack on every render and boot the user off
+  // any pushed sub-page (e.g. Account would "close on its own"). Track the last
+  // entry and act only on a real change.
+  const prevEntryRef = useRef(entry);
   useEffect(() => {
     if (!entry) return;
+    if (prevEntryRef.current === entry) return;
+    prevEntryRef.current = entry;
     setStack(stackFor(entry));
     onNavigate?.();
   }, [entry, onNavigate]);
@@ -271,6 +283,17 @@ export function SettingsTab({
     return <AppearancePage onBack={pop} />;
   }
 
+  if (page.name === "integrations") {
+    return (
+      <IntegrationsPage
+        gmailConnected={session.connectionMode === "google" || session.googleConnected === true}
+        integrations={(session as any).integrations ?? {}}
+        onConnectGmail={onConnectGoogle}
+        onBack={pop}
+      />
+    );
+  }
+
   if (page.name === "account") {
     return (
       <AccountPage
@@ -339,6 +362,13 @@ export function SettingsTab({
           subtitle="When EVE may interrupt"
           value={summarizeProactive(proactive.prefs)}
           onPress={() => push({ name: "proactive" })}
+        />
+        <SettingsRowItem
+          icon="git-network-outline"
+          tone="ambient"
+          title="Integrations"
+          subtitle="Connected apps & tools"
+          onPress={() => push({ name: "integrations" })}
         />
       </SettingsGroup>
 

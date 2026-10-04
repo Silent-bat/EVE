@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { ApiError } from "../api/client";
+import { ApiError } from "../api/convexApi";
 import type { UserProfile } from "../types";
 import { fetchProfile, saveProfile } from "./api";
 

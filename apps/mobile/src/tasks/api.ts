@@ -8,7 +8,7 @@
  * screen honest instead of inventing rows. When the route lands, the UI fills
  * in with no change to this file.
  */
-import { apiFetch } from "../api/client";
+import { apiFetch } from "../api/convexApi";
 import type { Task, TaskPriority, TaskStatus } from "../types";
 
 export async function fetchTasks(

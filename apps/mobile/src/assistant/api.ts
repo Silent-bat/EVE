@@ -7,7 +7,7 @@
  * distinct from an answer that merely said something. That distinction matters
  * in an app whose core promise is that it never acts without you knowing.
  */
-import { apiFetch } from "../api/client";
+import { apiFetch } from "../api/convexApi";
 import type { AssistantAnswer } from "../types";
 
 export async function askAssistant(prompt: string): Promise<AssistantAnswer> {

@@ -12,6 +12,8 @@ export type BriefingEmail = {
   summary: string;
   draftReply: string;
   status: EmailStatus;
+  /** Triage category from the mail-sort classifier (jev). Optional; older rows omit it. */
+  category?: string;
 };
 
 /**
@@ -170,6 +172,12 @@ export type DeviceNotification = {
   body: string;
   postedAt: string;
   receivedAt: string;
+  /** AI triage verdict, filled asynchronously after capture. */
+  triage?: {
+    verdict: "attention" | "useless" | "pending";
+    category?: string;
+    reason?: string;
+  } | null;
 };
 
 export type Session = {

@@ -5,7 +5,7 @@
  * shape or hand-construct query strings. Each function takes plain inputs
  * and returns the typed response — error handling stays at the call site.
  */
-import { apiFetch } from "../api/client";
+import { apiFetch } from "../api/convexApi";
 import type {
   ProactiveAvailableNow,
   ProactiveCategoryName,

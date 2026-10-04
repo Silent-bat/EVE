@@ -77,7 +77,7 @@ function makeStyles({ palette }: ThemeValue) {
   return StyleSheet.create({
     card: {
       backgroundColor: palette.surface,
-      borderRadius: radius.xl,
+      borderRadius: radius.lg,
       borderWidth: 1,
       borderColor: palette.border,
       padding: spacing.xl,

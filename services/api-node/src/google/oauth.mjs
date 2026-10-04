@@ -237,16 +237,29 @@ export function safeReturnTo(value) {
     return "eve://auth/google";
   }
   if (
-    parsed.protocol === "http:" &&
-    !config.isProduction &&
-    (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") &&
-    parsed.port &&
+    (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+    isAllowedWebReturnHost(parsed) &&
     !parsed.username &&
     !parsed.password
   ) {
     return parsed.toString().replace(/\/$/, "");
   }
   return "";
+}
+
+/**
+ * Only the configured first-party browser origins may receive a handoff.
+ * @param {URL} parsed
+ */
+function isAllowedWebReturnHost(parsed) {
+  if (config.isProduction) {
+    return parsed.protocol === "https:" && config.corsOrigins.includes(parsed.origin);
+  }
+  return (
+    parsed.protocol === "http:" &&
+    (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") &&
+    Boolean(parsed.port)
+  );
 }
 
 /** Remove expired entries and keep the public state store bounded. */

@@ -111,15 +111,18 @@ export function BottomNav({
         scaleTo={0.92}
         accessibilityRole="button"
         accessibilityLabel={eveLabel}
-        style={[styles.eveButton, { backgroundColor: palette.ambient }]}
+        style={[styles.eveButton, { backgroundColor: palette.gradientStart }]}
       >
+        {/* A clean glowing sphere — the EVE mark. Indigo→violet, no glyph, to
+            match the mockup's centre orb. */}
         <SoftGradient
-          colors={[palette.ambient, palette.ambientDeep]}
+          colors={[palette.gradientStart, palette.gradientEnd]}
           direction="diagonal"
-          bands={10}
+          bands={12}
           radius={radius.pill}
         />
-        <Ionicons name="sparkles" size={24} color={palette.textInverse} />
+        {/* Soft top-left highlight so the flat gradient reads as a sphere. */}
+        <View style={styles.orbHighlight} pointerEvents="none" />
       </PressableScale>
     </View>
   );
@@ -228,6 +231,15 @@ function makeStyles({ palette, type }: ThemeValue) {
       borderWidth: 3,
       borderColor: palette.background,
       ...elevation.float,
+    },
+    orbHighlight: {
+      position: "absolute",
+      top: EVE_BUTTON * 0.16,
+      left: EVE_BUTTON * 0.18,
+      width: EVE_BUTTON * 0.4,
+      height: EVE_BUTTON * 0.4,
+      borderRadius: radius.pill,
+      backgroundColor: "rgba(255,255,255,0.38)",
     },
   });
 }

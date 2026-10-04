@@ -56,15 +56,18 @@ export function normalizeSession(input: Session): Session {
   };
 }
 
-export function normalizeBriefing(input: Briefing): Briefing {
+export function normalizeBriefing(input: Briefing | null | undefined): Briefing {
+  // The briefing is legitimately null before the first Gmail poll, so guard
+  // the whole function rather than dereferencing `input` directly.
+  const briefing = input ?? EMPTY_BRIEFING;
   return {
     ...EMPTY_BRIEFING,
-    ...input,
+    ...briefing,
     stats: {
       ...EMPTY_BRIEFING.stats,
-      ...(input.stats || {}),
+      ...(briefing.stats || {}),
     },
-    emails: Array.isArray(input.emails) ? input.emails : [],
-    calendar: Array.isArray(input.calendar) ? input.calendar : [],
+    emails: Array.isArray(briefing.emails) ? briefing.emails : [],
+    calendar: Array.isArray(briefing.calendar) ? briefing.calendar : [],
   };
 }

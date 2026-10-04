@@ -35,7 +35,12 @@ export function CapturedPage({
   onClear: () => void | Promise<void>;
 }) {
   const styles = useThemedStyles(makeStyles);
-  const shown = notifications.slice(0, MAX_SHOWN);
+  // Sort needs-attention first, then unclassified, then useless — so what the
+  // user should look at rises to the top. Stable within each group by arrival.
+  const rank = (n: DeviceNotification) =>
+    n.triage?.verdict === "attention" ? 0 : n.triage?.verdict === "useless" ? 2 : 1;
+  const shown = [...notifications].sort((a, b) => rank(a) - rank(b)).slice(0, MAX_SHOWN);
+  const attentionCount = notifications.filter((n) => n.triage?.verdict === "attention").length;
 
   function confirmClear() {
     if (notifications.length === 0) return;
@@ -74,7 +79,9 @@ export function CapturedPage({
       </SettingsGroup>
 
       <View style={styles.listHeader}>
-        <Text style={styles.listTitle}>Recently captured</Text>
+        <Text style={styles.listTitle}>
+          {attentionCount > 0 ? `${attentionCount} need attention` : "Recently captured"}
+        </Text>
         <View style={styles.listActions}>
           {notifications.length > 0 ? (
             <Text style={styles.listCount}>
@@ -112,9 +119,20 @@ export function CapturedPage({
                 }. ${formatTime(entry.receivedAt)}`}
               >
                 <View style={styles.itemBody}>
-                  <Text style={styles.app} numberOfLines={1}>
-                    {entry.appName || entry.packageName}
-                  </Text>
+                  <View style={styles.appRow}>
+                    <Text style={styles.app} numberOfLines={1}>
+                      {entry.appName || entry.packageName}
+                    </Text>
+                    {entry.triage?.verdict === "attention" ? (
+                      <View style={[styles.badge, styles.badgeAttention]}>
+                        <Text style={styles.badgeAttentionText}>Needs attention</Text>
+                      </View>
+                    ) : entry.triage?.verdict === "useless" ? (
+                      <View style={[styles.badge, styles.badgeUseless]}>
+                        <Text style={styles.badgeUselessText}>Noise</Text>
+                      </View>
+                    ) : null}
+                  </View>
                   <Text style={styles.title} numberOfLines={1}>
                     {entry.title || "(no title)"}
                   </Text>
@@ -175,6 +193,26 @@ function makeStyles({ palette, type }: ThemeValue) {
       padding: spacing.lg,
     },
     itemBody: { flex: 1, gap: 2 },
+    appRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+    badge: { paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: radius.sm },
+    badgeAttention: { backgroundColor: palette.dangerTint },
+    badgeAttentionText: {
+      ...type.caption,
+      fontSize: 10,
+      fontWeight: "800",
+      color: palette.danger,
+      textTransform: "uppercase",
+      letterSpacing: 0.3,
+    },
+    badgeUseless: { backgroundColor: palette.surfaceMuted },
+    badgeUselessText: {
+      ...type.caption,
+      fontSize: 10,
+      fontWeight: "700",
+      color: palette.textMuted,
+      textTransform: "uppercase",
+      letterSpacing: 0.3,
+    },
     // App name first and small: it's the thing that tells you whether the
     // notification below is worth reading.
     app: {

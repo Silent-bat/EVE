@@ -9,11 +9,17 @@ const DEFAULT_WEB_GOOGLE_RETURN_URL = "http://localhost:8081";
  * Resolve the API base URL the app should talk to. Order of precedence:
  *
  *  1. `EXPO_PUBLIC_EVE_API_URL` (set at build time)
- *  2. Metro's debugger host (working dev server LAN IP)
- *  3. `http://127.0.0.1:8080` as a last resort (loopback/web)
+ *  2. `EXPO_PUBLIC_CONVEX_URL` for Convex backend (new default)
+ *  3. Metro's debugger host (working dev server LAN IP) — legacy Node API
+ *  4. `http://127.0.0.1:8080` as a last resort (loopback/web)
  */
 export function resolveAPIBaseURL(): string {
   if (process.env.EXPO_PUBLIC_EVE_API_URL) return process.env.EXPO_PUBLIC_EVE_API_URL;
+
+  // Use Convex as the default backend if configured
+  if (process.env.EXPO_PUBLIC_CONVEX_URL) {
+    return process.env.EXPO_PUBLIC_CONVEX_URL;
+  }
 
   const manifestHostUri =
     Constants.expoConfig?.hostUri ||

@@ -125,3 +125,21 @@ export function oauthCodeFromURL(value: string): string {
     }
   }
 }
+
+/**
+ * Read the non-sensitive completion marker used by an authenticated Google
+ * connection callback. It lives in the fragment for the same reason as the
+ * login handoff code: browsers and HTTP servers do not send fragments onward.
+ */
+export function googleConnectionCompletedFromURL(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const fragment = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+    return (
+      new URLSearchParams(fragment).get("google_connected") === "1" ||
+      url.searchParams.get("google_connected") === "1"
+    );
+  } catch {
+    return /(?:[#?&])google_connected=1(?:[&#]|$)/.test(value);
+  }
+}

@@ -20,6 +20,9 @@ import { useTheme, useThemedStyles, type ThemeValue } from "../ThemeContext";
 
 export type ChatAuthor = "eve" | "user";
 
+/** White always reads on the indigo user bubble, in either theme. */
+const ON_USER = "#ffffff";
+
 export function ChatBubble({
   author,
   text,
@@ -47,14 +50,17 @@ export function ChatBubble({
           style={[
             styles.bubble,
             fromEve ? styles.bubbleEve : styles.bubbleUser,
-            fromEve ? null : { backgroundColor: palette.ambient },
+            // Solid indigo fill for the user — clean, high-contrast, and it
+            // always respects the bubble's rounded corners (a diagonal gradient
+            // skewed outside the shape).
+            fromEve ? null : { backgroundColor: palette.gradientStart },
           ]}
         >
           {pending ? (
             <TypingDots />
           ) : (
             <Text
-              style={[styles.text, fromEve ? null : { color: palette.textInverse }]}
+              style={[styles.text, fromEve ? null : { color: ON_USER }]}
               // The bubble already reads as a message; naming the speaker is
               // what a screen reader is missing.
               accessibilityLabel={`${fromEve ? "EVE" : "You"}: ${text ?? ""}`}
@@ -106,7 +112,7 @@ export function VoiceMessage({
   const { palette } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const fromEve = author === "eve";
-  const tint = fromEve ? palette.ambient : palette.textInverse;
+  const tint = fromEve ? palette.ambient : ON_USER;
 
   return (
     <ChatBubble
@@ -163,7 +169,11 @@ function makeStyles({ palette, type }: ThemeValue) {
       borderBottomLeftRadius: radius.xs,
       ...elevation.sm,
     },
-    bubbleUser: { borderRadius: radius.xl, borderBottomRightRadius: radius.xs },
+    bubbleUser: {
+      borderRadius: radius.xl,
+      borderBottomRightRadius: radius.xs,
+      overflow: "hidden",
+    },
     text: { ...type.body, lineHeight: 22 },
     footer: { marginTop: 2 },
     timestamp: { ...type.caption, marginTop: 4, marginLeft: spacing.xs },
