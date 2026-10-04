@@ -168,6 +168,43 @@ export function writeAuthRedirect(response, code, returnTo) {
 }
 
 /**
+ * Return to an already-authenticated EVE app after Google connection.
+ *
+ * Unlike `writeAuthRedirect`, this flow must not mint or carry an OAuth
+ * handoff code: the user already has a valid EVE session. A marker lets the
+ * app refresh its session and onboarding state without putting credentials in
+ * the redirect URL.
+ *
+ * @param {ServerResponse} response
+ * @param {string} returnTo
+ */
+export function writeGoogleConnectedRedirect(response, returnTo) {
+  if (!returnTo) {
+    writeHTML(response, 200, "Google connected. You can return to EVE.");
+    return;
+  }
+  let redirectURL;
+  try {
+    const parsed = new URL(returnTo);
+    if (!isAllowedAuthRedirect(parsed)) throw new Error("redirect destination is not allowlisted");
+    // Keep the marker out of HTTP query logs and Referer headers. It is not a
+    // credential, but there is no reason to expose it to intermediaries.
+    parsed.hash = new URLSearchParams({ google_connected: "1" }).toString();
+    redirectURL = parsed.toString();
+  } catch {
+    // Keep the callback fail-closed if a caller passes an unsanitized URL.
+    writeHTML(response, 200, "Google connected. You can return to EVE.");
+    return;
+  }
+  response.writeHead(302, {
+    Location: redirectURL,
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+  });
+  response.end();
+}
+
+/**
  * Keep this response-level guard in addition to `safeReturnTo` at the OAuth
  * state boundary. It protects the helper if another callback ever passes an
  * unsanitized destination directly.
@@ -185,12 +222,25 @@ function isAllowedAuthRedirect(parsed) {
     return true;
   }
   return (
-    parsed.protocol === "http:" &&
-    !config.isProduction &&
-    (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") &&
-    Boolean(parsed.port) &&
+    (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+    isAllowedWebReturnHost(parsed) &&
     !parsed.username &&
     !parsed.password
+  );
+}
+
+/**
+ * Keep the response guard in sync with safeReturnTo().
+ * @param {URL} parsed
+ */
+function isAllowedWebReturnHost(parsed) {
+  if (config.isProduction) {
+    return parsed.protocol === "https:" && config.corsOrigins.includes(parsed.origin);
+  }
+  return (
+    parsed.protocol === "http:" &&
+    (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") &&
+    Boolean(parsed.port)
   );
 }
 

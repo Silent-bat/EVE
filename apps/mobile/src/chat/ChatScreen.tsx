@@ -190,7 +190,7 @@ export function ChatScreen({ userID }: { userID: string }) {
         </PressableScale>
         <View style={styles.navTitleWrap}>
           <Text style={styles.navTitle}>
-            {showHistory ? "History" : (activeConversation?.title ?? "Messages")}
+            {showHistory ? "History" : (activeConversation?.title ?? "Chat")}
           </Text>
           {!showHistory && turns.length > 0 ? (
             <Text style={styles.navMeta}>
@@ -424,14 +424,14 @@ function Composer({
         <TextInput
           value={value}
           onChangeText={onChange}
-          placeholder="Message EVE"
+          placeholder="Ask me anything…"
           placeholderTextColor={palette.textMuted}
           style={styles.input}
           returnKeyType="send"
           onSubmitEditing={onSend}
           editable={!busy}
           multiline
-          accessibilityLabel="Message EVE"
+          accessibilityLabel="Ask EVE anything"
         />
         <PressableScale
           onPress={onSend}

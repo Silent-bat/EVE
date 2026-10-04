@@ -15,7 +15,7 @@ import { withAlpha } from "../../gradient";
 import { PressableScale } from "../../motion";
 import { HIT_SLOP, MIN_TOUCH, radius, spacing } from "../../theme";
 import { useTheme, useThemedStyles, type ThemeValue } from "../../ThemeContext";
-import { ApiError } from "../../../api/client";
+import { ApiError } from "../../../api/convexApi";
 
 type IoniconName = keyof typeof Ionicons.glyphMap;
 

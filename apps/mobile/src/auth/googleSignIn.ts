@@ -8,6 +8,7 @@ import { config } from "../config";
 
 const IS_EXPO_GO = config.isExpoGo;
 const WEB_GOOGLE_RETURN_URL = config.google.webReturnUrl;
+const EXPLICIT_WEB_GOOGLE_RETURN_URL = process.env.EXPO_PUBLIC_GOOGLE_WEB_RETURN_URL?.trim();
 
 let cachedGoogleSignInModule: typeof import("@react-native-google-signin/google-signin") | null = null;
 let googleSignInProbed = false;
@@ -55,6 +56,22 @@ export function googleErrorCode(error: unknown): string {
 }
 
 export function googleLoginReturnURL(): string {
-  if (Platform.OS === "web") return WEB_GOOGLE_RETURN_URL;
+  if (Platform.OS === "web") {
+    // React Native Web can be served as either localhost or 127.0.0.1 (and
+    // Expo LAN mode can use another host). Keep the OAuth origin identical to
+    // the page that started the flow; WebBrowser and the callback allowlist
+    // both compare origins exactly. An explicit build-time URL still wins for
+    // deployments that use a dedicated callback route.
+    if (EXPLICIT_WEB_GOOGLE_RETURN_URL) return WEB_GOOGLE_RETURN_URL;
+    const browserLocation = (
+      globalThis as typeof globalThis & {
+        location?: { origin?: string; pathname?: string };
+      }
+    ).location;
+    if (browserLocation?.origin) {
+      return `${browserLocation.origin}${browserLocation.pathname || "/"}`;
+    }
+    return WEB_GOOGLE_RETURN_URL;
+  }
   return "eve://auth/google";
 }

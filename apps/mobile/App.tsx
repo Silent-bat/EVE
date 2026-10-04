@@ -4,8 +4,10 @@
  * file focused on coordination so it stays small.
  */
 import { StatusBar } from "expo-status-bar";
+import * as WebBrowser from "expo-web-browser";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, Linking, Platform, ScrollView, StyleSheet, View } from "react-native";
+import { AppState, BackHandler, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 // Android 15 / Expo SDK 54 draw the app edge to edge, and React Native's own
 // SafeAreaView only insets on iOS — so on Android it silently does nothing and
 // the header lands under the status bar. Everything that owns a full screen uses
@@ -13,7 +15,7 @@ import { AppState, Linking, Platform, ScrollView, StyleSheet, View } from "react
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import { assertSecureTransport, config } from "./src/config";
-import { apiFetch as apiFetchClient, ApiError, tokenStore } from "./src/api/client";
+import { apiFetch as apiFetchClient, tokenStore } from "./src/api/convexApi";
 import { configureForegroundHandler, registerPushToken, unregisterPushToken } from "./src/notifications/push";
 import {
   configureNotificationSync,
@@ -36,6 +38,8 @@ import type {
 } from "./src/types";
 
 import { AppErrorBoundary } from "./src/auth/AppErrorBoundary";
+import { ConvexProvider } from "./src/api/convexClient";
+import { useConvexAuth } from "@convex-dev/auth/react";
 import { AuthScreen, type AuthMode } from "./src/auth/AuthScreen";
 import { BootScreen } from "./src/onboarding/BootScreen";
 import { OnboardingFlow } from "./src/onboarding/OnboardingFlow";
@@ -64,6 +68,9 @@ import { useListenFromHomeEnabled } from "./src/settings/devicePrefs";
 import { SettingsTab, type SettingsEntry } from "./src/settings/SettingsTab";
 import { Sidebar, type SidebarDestination } from "./src/settings/Sidebar";
 import { ChatScreen } from "./src/chat/ChatScreen";
+import { CalendarScreen } from "./src/calendar/CalendarScreen";
+import { CreateTaskScreen } from "./src/tasks/CreateTaskScreen";
+import { EmailInsightsScreen } from "./src/briefing/EmailInsightsScreen";
 import { clearAllChatHistory } from "./src/chat/history";
 import { fetchInbox } from "./src/proactive/api";
 import { VoiceScreen } from "./src/voice/VoiceScreen";
@@ -76,7 +83,7 @@ import {
   writeCache,
 } from "./src/storage/localCache";
 
-import { oauthCodeFromURL } from "./src/utils/formatters";
+import { googleConnectionCompletedFromURL, oauthCodeFromURL } from "./src/utils/formatters";
 import {
   DEFAULT_PREFERENCES,
   EMPTY_BRIEFING,
@@ -86,7 +93,6 @@ import {
 } from "./src/utils/normalizers";
 
 const API_BASE_URL = config.apiBaseURL;
-const AUTH_BOOT_TIMEOUT_MS = config.auth.bootTimeoutMs;
 const GOOGLE_WEB_CLIENT_ID = config.google.webClientId;
 const GOOGLE_SCOPES = config.google.scopes;
 // Native sign-in fails for a whole family of setup reasons that all look
@@ -96,6 +102,31 @@ const GOOGLE_SCOPES = config.google.scopes;
 // two that are intentional, where launching a browser would be wrong.
 // The Android bridge reports codes as bare numbers, hence both spellings.
 const GOOGLE_NATIVE_NO_FALLBACK_CODES = ["SIGN_IN_CANCELLED", "12501", "IN_PROGRESS", "12502"];
+
+/** Remove a consumed web OAuth marker without touching native deep links. */
+function clearWebGoogleCallbackURL() {
+  if (Platform.OS !== "web" || typeof window === "undefined" || !window.location.hash) return;
+  const currentURL = window.location.href;
+  if (!oauthCodeFromURL(currentURL) && !googleConnectionCompletedFromURL(currentURL)) return;
+  const cleanURL = new URL(currentURL);
+  cleanURL.hash = "";
+  window.history.replaceState(null, "", `${cleanURL.pathname}${cleanURL.search}`);
+}
+
+/** Relay a web OAuth callback from a popup to the tab that started it. */
+function relayWebGoogleCallbackToOpener(value: string): boolean {
+  if (Platform.OS !== "web" || typeof window === "undefined" || !window.opener) return false;
+  if (!oauthCodeFromURL(value) && !googleConnectionCompletedFromURL(value)) return false;
+  try {
+    if (new URL(value).origin !== window.location.origin) return false;
+  } catch {
+    return false;
+  }
+  window.opener.postMessage({ type: "eve-google-callback", url: value }, window.location.origin);
+  clearWebGoogleCallbackURL();
+  window.close();
+  return true;
+}
 
 /**
  * The four destinations on the nav bar: Home, Briefing, Messages, Activity.
@@ -110,17 +141,15 @@ const GOOGLE_NATIVE_NO_FALLBACK_CODES = ["SIGN_IN_CANCELLED", "12501", "IN_PROGR
  * the Needs Attention section of Home, where the decision sits next to the mail
  * that prompted it instead of in a queue you have to remember to visit.
  */
-type Tab = "today" | "briefing" | "messages" | "audit";
+type Tab = "today" | "messages" | "calendar" | "briefing" | "audit";
 
+// The bottom nav from the new design: Home · Chat · (EVE orb) · Calendar · More.
+// "more" is not a content tab — it opens the settings hub.
 const NAV_TABS: NavTab[] = [
   { key: "today", label: "Home", icon: "home-outline", iconActive: "home" },
-  { key: "briefing", label: "Briefing", icon: "newspaper-outline", iconActive: "newspaper" },
-  { key: "messages", label: "Messages", icon: "chatbubble-outline", iconActive: "chatbubble" },
-  // Receipt rather than clock: Ionicons' filled `time` is a solid disc with the
-  // hands knocked out, so the active Activity tab read as a badge next to three
-  // line glyphs. `receipt` stays a glyph in both states, and it already labels
-  // this screen's empty state.
-  { key: "audit", label: "Activity", icon: "receipt-outline", iconActive: "receipt" },
+  { key: "messages", label: "Chat", icon: "chatbubble-outline", iconActive: "chatbubble" },
+  { key: "calendar", label: "Calendar", icon: "calendar-outline", iconActive: "calendar" },
+  { key: "more", label: "More", icon: "ellipsis-horizontal-circle-outline", iconActive: "ellipsis-horizontal-circle" },
 ];
 
 /**
@@ -136,20 +165,22 @@ const SIDEBAR_TO_SETTINGS: Record<SidebarDestination, SettingsEntry> = {
 
 export default function App() {
   return (
-    // Outermost, above the error boundary: the crash screen insets too, and it
-    // would throw for want of a provider if this sat inside the boundary.
-    <SafeAreaProvider>
-      <AppErrorBoundary>
-        <ThemeProvider>
-          <EVEApp />
-        </ThemeProvider>
-      </AppErrorBoundary>
-    </SafeAreaProvider>
+    <ConvexProvider>
+      {/* Outermost, above the error boundary: the crash screen insets too, and it
+          would throw for want of a provider if this sat inside the boundary. */}
+      <SafeAreaProvider>
+        <AppErrorBoundary>
+          <ThemeProvider>
+            <EVEApp />
+          </ThemeProvider>
+        </AppErrorBoundary>
+      </SafeAreaProvider>
+    </ConvexProvider>
   );
 }
 
 function EVEApp() {
-  const { scheme } = useTheme();
+  const { scheme, palette } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -169,6 +200,11 @@ function EVEApp() {
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [preferences, setPreferences] = useState<Preferences>(DEFAULT_PREFERENCES);
   const [deviceNotifications, setDeviceNotifications] = useState<DeviceNotification[]>([]);
+  // Convex Auth owns the session. The legacy in-memory tokenStore does not
+  // survive a reload, so hydrate the boot from the provider's persisted state:
+  // until it settles we cannot know whether a stored session exists.
+  const { isLoading: convexAuthLoading, isAuthenticated: convexAuthenticated } =
+    useConvexAuth();
   const [notificationAccessEnabled, setNotificationAccessEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
   // Tracks whether the initial loadV1() has completed at least once. After
@@ -180,6 +216,10 @@ function EVEApp() {
   const [apiError, setApiError] = useState<string | null>(null);
   const [inboxNewCount, setInboxNewCount] = useState(0);
   const [voiceVisible, setVoiceVisible] = useState(false);
+  const [createTaskVisible, setCreateTaskVisible] = useState(false);
+  const [insightsVisible, setInsightsVisible] = useState(false);
+  // When a message is opened via "Draft reply", land on its reply section.
+  const [openEmailReply, setOpenEmailReply] = useState(false);
   /**
    * The mail being read, if any. Held here rather than per-tab because both
    * Home and Briefing open it and the modal has to outlive a tab switch — and
@@ -199,6 +239,30 @@ function EVEApp() {
   // OAuth callback). A response that belongs to an older token must never
   // repopulate the UI after logout or a newer refresh has won the race.
   const loadRequestRef = useRef(0);
+  // Android hardware back across the tab shell: from any tab other than Home,
+  // back returns to Home; from Home, back falls through to the OS (exit the
+  // app). Modals own their own back via onRequestClose, and Settings has its
+  // own handler, so only act when neither is showing.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (settingsEntry !== null) return false;
+      if (openEmail || voiceVisible || createTaskVisible || insightsVisible) return false;
+      if (tab !== "today") {
+        setTab("today");
+        return true;
+      }
+      return false; // on Home → let the OS close the app
+    });
+    return () => sub.remove();
+  }, [settingsEntry, openEmail, voiceVisible, createTaskVisible, insightsVisible, tab]);
+  const googleAuthSessionActiveRef = useRef(false);
+  const googlePendingCallbackRef = useRef<string | null>(null);
+  const googleExchangeRef = useRef(new Map<string, Promise<boolean>>());
+  const webGoogleCallbackRelayedRef = useRef(false);
+  // Authenticated web sessions live in memory. Keep the callback exchange in
+  // this tab, so a popup can notify us without reloading and losing the token.
+  // Store the exact source window and require the reply to come from it.
+  const webGooglePopupRef = useRef<Window | null>(null);
 
   const loadV1 = useCallback(async () => {
     const requestToken = authToken;
@@ -257,6 +321,19 @@ function EVEApp() {
     }
   }, [authToken, briefingRange]);
 
+  // The Convex auth state is the source of truth for "is there a session".
+  // The in-memory tokenStore above cannot answer that after a reload, so sync
+  // the boot from the provider once it has finished reading its stored token.
+  useEffect(() => {
+    if (convexAuthLoading) return;
+    if (convexAuthenticated) {
+      if (!authToken) setAuthToken("convex-session");
+    } else if (authToken === "convex-session") {
+      setAuthToken(null);
+    }
+    setAuthChecked(true);
+  }, [convexAuthLoading, convexAuthenticated, authToken]);
+
   /**
    * Invalidate any refresh already in flight before a local mutation starts.
    * The mutation response owns the newest state; an older GET must not be
@@ -282,39 +359,15 @@ function EVEApp() {
     }
   }, [beginStateMutation, session?.userId]);
 
-  useEffect(() => {
-    let active = true;
-    const fallback = setTimeout(() => {
-      if (!active) return;
-      void tokenStore.clear();
-      setAuthToken(null);
-      setAuthChecked(true);
-      setLoading(false);
-      setApiError("Could not restore the stored session. Sign in again.");
-    }, AUTH_BOOT_TIMEOUT_MS);
-
-    void tokenStore
-      .hydrate()
-      .then((token) => {
-        if (!active) return;
-        setAuthToken(token);
-      })
-      .catch(() => {
-        if (!active) return;
-        setAuthToken(null);
-        setApiError("Could not restore the stored session. Sign in again.");
-      })
-      .finally(() => {
-        if (!active) return;
-        clearTimeout(fallback);
-        setAuthChecked(true);
-      });
-
-    return () => {
-      active = false;
-      clearTimeout(fallback);
-    };
-  }, []);
+  // Boot session restoration is owned entirely by Convex Auth (see the
+  // useConvexAuth effect above). Convex Auth persists its token in AsyncStorage
+  // and rehydrates it on launch, so the user stays signed in across app closes
+  // until they explicitly sign out. We intentionally do NOT decide "signed out"
+  // from the in-memory tokenStore mirror here — it is always empty on a cold
+  // start, so doing so would flash the login screen (or a false "sign in again")
+  // over a perfectly valid persisted session while Convex Auth is still loading.
+  // authChecked is gated on convexAuthLoading settling, so the BootScreen holds
+  // until the real session state is known.
 
   useEffect(() => {
     if (authToken) {
@@ -539,38 +592,97 @@ function EVEApp() {
   const finishGoogleLogin = useCallback(async (url: string) => {
     const code = oauthCodeFromURL(url);
     if (!code) return false;
-    try {
-      const result = await apiFetch<{ token: string; session: Session }>(
-        "/v1/auth/google-exchange",
-        { method: "POST", body: JSON.stringify({ code }) },
-        null,
-      );
-      await tokenStore.set(result.token);
-      const safeSession = normalizeSession(result.session);
-      setAuthToken(result.token);
-      setSession(safeSession);
-      setPreferences(safeSession.preferences);
-      setApiError(null);
-      setLoading(true);
-      return true;
-    } catch (error) {
-      setApiError(error instanceof Error ? error.message : "Google login could not be completed");
-      return false;
-    }
+
+    const existingExchange = googleExchangeRef.current.get(code);
+    if (existingExchange) return existingExchange;
+
+    const exchange = (async () => {
+      try {
+        const result = await apiFetch<{ token: string; session: Session }>(
+          "/v1/auth/google-exchange",
+          { method: "POST", body: JSON.stringify({ code }) },
+          null,
+        );
+        await tokenStore.set(result.token);
+        const safeSession = normalizeSession(result.session);
+        setAuthToken(result.token);
+        setSession(safeSession);
+        setPreferences(safeSession.preferences);
+        setApiError(null);
+        setLoading(true);
+        return true;
+      } catch (error) {
+        setApiError(error instanceof Error ? error.message : "Google login could not be completed");
+        return false;
+      }
+    })();
+    googleExchangeRef.current.set(code, exchange);
+
+    return exchange;
   }, []);
+
+  const finishGoogleCallback = useCallback(
+    async (url: string) => {
+      if (oauthCodeFromURL(url)) {
+        const completed = await finishGoogleLogin(url);
+        if (completed) clearWebGoogleCallbackURL();
+        return completed;
+      }
+      if (!googleConnectionCompletedFromURL(url)) return false;
+      await loadV1();
+      clearWebGoogleCallbackURL();
+      return true;
+    },
+    [finishGoogleLogin, loadV1],
+  );
 
   useEffect(() => {
     void Linking.getInitialURL().then((url) => {
-      if (url) void finishGoogleLogin(url);
+      const initialURL =
+        url || (Platform.OS === "web" && typeof window !== "undefined" ? window.location.href : "");
+      if (!initialURL) return;
+      if (relayWebGoogleCallbackToOpener(initialURL)) {
+        webGoogleCallbackRelayedRef.current = true;
+        return;
+      }
+      void finishGoogleCallback(initialURL);
     });
-  }, [finishGoogleLogin]);
+  }, [finishGoogleCallback]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const onGooglePopupMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source !== webGooglePopupRef.current) {
+        return;
+      }
+      const payload = event.data as { type?: unknown; url?: unknown };
+      if (payload?.type !== "eve-google-callback" || typeof payload.url !== "string") return;
+      try {
+        if (new URL(payload.url).origin !== window.location.origin) return;
+      } catch {
+        return;
+      }
+      webGooglePopupRef.current = null;
+      void finishGoogleCallback(payload.url);
+    };
+    window.addEventListener("message", onGooglePopupMessage);
+    return () => window.removeEventListener("message", onGooglePopupMessage);
+  }, [finishGoogleCallback]);
 
   useEffect(() => {
     const subscription = Linking.addEventListener("url", (event) => {
-      void finishGoogleLogin(event.url);
+      if (webGoogleCallbackRelayedRef.current) return;
+      if (googleAuthSessionActiveRef.current) {
+        // Expo's Android auth-session polyfill races the AppState resume event
+        // against its Linking listener. Keep the callback if the browser
+        // session reports dismissal first; the caller consumes it below.
+        googlePendingCallbackRef.current = event.url;
+        return;
+      }
+      void finishGoogleCallback(event.url);
     });
     return () => subscription.remove();
-  }, [finishGoogleLogin]);
+  }, [finishGoogleCallback]);
 
   async function submitAuth({ email, password, mode }: { email: string; password: string; mode: AuthMode }) {
     setSaving(true);
@@ -593,8 +705,24 @@ function EVEApp() {
   }
 
   // Hands the browser the consent URL and lets the `eve://` deep link
-  // carry a one-use handoff code back. The bearer session token is exchanged
-  // over the API instead of travelling through the URL.
+  // carry a one-use handoff code back. On native platforms, the auth-session
+  // wrapper owns the redirect listener and closes the browser handoff; a plain
+  // Linking.openURL leaves Chrome sitting on the callback page instead.
+  async function openGoogleNativeAuthSession(authURL: string, returnTo: string): Promise<string | null> {
+    googleAuthSessionActiveRef.current = true;
+    googlePendingCallbackRef.current = null;
+    let callbackURL: string | null = null;
+    try {
+      const result = await WebBrowser.openAuthSessionAsync(authURL, returnTo);
+      if (result.type === "success") callbackURL = result.url;
+    } finally {
+      googleAuthSessionActiveRef.current = false;
+      callbackURL ||= googlePendingCallbackRef.current;
+      googlePendingCallbackRef.current = null;
+    }
+    return callbackURL;
+  }
+
   async function startGoogleWebLogin() {
     const returnTo = googleLoginReturnURL();
     const auth = await apiFetch<{ configured: boolean; url: string | null; reason?: string }>(
@@ -605,7 +733,20 @@ function EVEApp() {
     if (!auth.configured || !auth.url) {
       throw new Error(auth.reason || "Google login is not configured");
     }
-    await Linking.openURL(auth.url);
+    if (Platform.OS === "web") {
+      // React Native Web's Linking.openURL opens a new tab. That tab cannot
+      // deliver the OAuth fragment to this app, so navigate the current tab
+      // and let the callback reload EVE with the one-use handoff code.
+      if (typeof window !== "undefined") {
+        window.location.assign(auth.url);
+      } else {
+        await Linking.openURL(auth.url);
+      }
+      return;
+    }
+
+    const callbackURL = await openGoogleNativeAuthSession(auth.url, returnTo);
+    if (callbackURL) await finishGoogleCallback(callbackURL);
   }
 
   async function loginWithGoogle() {
@@ -752,14 +893,42 @@ function EVEApp() {
   async function connectGoogle() {
     setSaving(true);
     setApiError(null);
+    let googlePopup: Window | null = null;
     try {
-      const auth = await apiFetch<{ configured: boolean; url: string | null }>("/v1/google/auth-url");
-      if (auth.configured && auth.url) {
-        await Linking.openURL(auth.url);
+      // Open the window while this handler still has the browser's user
+      // activation. The API request below is asynchronous, so opening it
+      // afterward would be blocked by most browsers.
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        googlePopup = window.open("about:blank", "_blank", "popup,width=500,height=650");
+        if (!googlePopup) throw new Error("Allow pop-ups to connect Gmail to EVE.");
+        webGooglePopupRef.current = googlePopup;
+      }
+      const returnTo = googleLoginReturnURL();
+      const auth = await apiFetch<{ configured: boolean; url: string | null; reason?: string }>(
+        `/v1/google/auth-url?returnTo=${encodeURIComponent(returnTo)}`,
+      );
+      if (!auth.configured || !auth.url) {
+        throw new Error(auth.reason || "Google OAuth is not configured on the API.");
+      }
+      if (Platform.OS === "web") {
+        // The callback page relays its marker to this tab, preserving the
+        // authenticated session while Google runs in the popup.
+        if (googlePopup) {
+          googlePopup.location.href = auth.url;
+        } else {
+          await Linking.openURL(auth.url);
+        }
         return;
       }
-      throw new Error("Google OAuth is not configured on the API.");
+      const callbackURL = await openGoogleNativeAuthSession(auth.url, returnTo);
+      if (callbackURL) await finishGoogleCallback(callbackURL);
     } catch (error) {
+      webGooglePopupRef.current = null;
+      try {
+        if (googlePopup && !googlePopup.closed) googlePopup.close();
+      } catch {
+        // best-effort popup cleanup
+      }
       setApiError(error instanceof Error ? error.message : "Could not connect Google");
     } finally {
       setSaving(false);
@@ -871,21 +1040,40 @@ function EVEApp() {
         onRetry={loadV1}
         onDismissError={() => setApiError(null)}
         onSavePreferences={(next) => void updatePreferences(next)}
+        onSaveProfile={(about) => {
+          // Map the onboarding answers onto the profile the agent reads. All
+          // optional; only send fields the user actually filled in.
+          const patch: Record<string, unknown> = {};
+          if (about.role.trim()) patch.role = about.role.trim();
+          const goals = about.focus
+            .split(/[\n;]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+          if (goals.length) patch.goals = goals;
+          const contacts = about.people
+            .split(/[\n,]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+          if (contacts.length) patch.keyContacts = contacts;
+          if (Object.keys(patch).length) {
+            void apiFetchClient("/v1/profile", { method: "PUT", body: JSON.stringify(patch) }).catch(
+              () => undefined,
+            );
+          }
+        }}
         onDone={() => setOnboardingDone(true)}
         onSignOut={logout}
       />
     );
   }
 
-  // Onboarded, but the Google grant has since lapsed. Every mail-backed screen
-  // would be empty from here, so ask for the reconnection instead of showing an
-  // app that quietly does nothing. The `!session` arm is the same condition —
-  // no session means nothing to be connected with — and narrows `session` to
-  // non-null for the main UI below.
-  if (!session || !session.googleConnected) {
+  // Gmail is OPTIONAL. A signed-in user without Google reaches the full app in
+  // "simple" mode; the Gmail-backed screens/features render a connect prompt
+  // instead of being walled off here. We only require a session to continue.
+  if (!session) {
     return (
       <ReconnectScreen
-        email={session?.email ?? null}
+        email={null}
         saving={saving}
         apiError={apiError}
         onConnect={connectGoogle}
@@ -899,6 +1087,15 @@ function EVEApp() {
   // The bar is chrome for the four top-level destinations. A settings page
   // replaces them, so it takes the bar away with it.
   const navVisible = settingsEntry === null;
+
+  // Two-tier UX: a user who hasn't connected Gmail runs EVE in "simple" mode.
+  // Calendar is Gmail-backed, so it's hidden until they connect; Home, Chat and
+  // More always work. Everything mail-backed shows a connect prompt instead.
+  const gmailConnected = session.connectionMode === "google" || session.googleConnected === true;
+  const visibleTabs = gmailConnected
+    ? NAV_TABS
+    : NAV_TABS.filter((t) => t.key !== "calendar");
+  const effectiveTab: Tab = !gmailConnected && tab === "calendar" ? "today" : tab;
 
   const errorBanner = apiError ? (
     <ErrorBanner message={apiError} onDismiss={() => setApiError(null)} onRetry={loadV1} />
@@ -920,8 +1117,7 @@ function EVEApp() {
             listenFromHomeEnabled={listenFromHomeEnabled}
             onChangeListenFromHome={setListenFromHomeEnabled}
             entry={settingsEntry}
-            onExit={() => setSettingsEntry(null)}
-            onLogout={logout}
+            onExit={() => setSettingsEntry(null)}            onLogout={logout}
             onAccountDeleted={() => {
               // The token died with the account, so there is nothing to log out
               // of — drop straight back to the sign-in screen.
@@ -957,23 +1153,31 @@ function EVEApp() {
 
       {/* Messages owns its own scroller and keyboard handling, so it sits in
           the frame directly. Everything else shares the page scroller. */}
-      {tab === "messages" ? (
+      {effectiveTab === "messages" ? (
         <View style={styles.flex}>
           {errorBanner}
           <ChatScreen userID={session.userId} />
+        </View>
+      ) : effectiveTab === "calendar" ? (
+        <View style={styles.flex}>
+          {errorBanner}
+          <CalendarScreen events={briefing.calendar} />
         </View>
       ) : (
         <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
           {errorBanner}
 
-          <FadeSlideIn key={tab}>
-            {tab === "today" && (
+          <FadeSlideIn key={effectiveTab}>
+            {effectiveTab === "today" && (
               <TodayScreen
                 briefing={briefing}
                 email={session.email}
                 name={session.displayName}
                 photoURL={session.photoURL}
                 saving={saving}
+                gmailConnected={gmailConnected}
+                onConnectGmail={connectGoogle}
+                onOpenInsights={() => setInsightsVisible(true)}
                 askEnabled={listenFromHomeEnabled}
                 voiceActive={voiceVisible}
                 onEmailAction={(emailId, status) => void recordAction(emailId, status)}
@@ -986,7 +1190,7 @@ function EVEApp() {
               />
             )}
 
-            {tab === "briefing" && (
+            {effectiveTab === "briefing" && (
               <BriefingTab
                 briefing={briefing}
                 pendingCount={pendingCount}
@@ -1000,18 +1204,22 @@ function EVEApp() {
               />
             )}
 
-            {tab === "audit" && <AuditTab audit={audit} />}
+            {effectiveTab === "audit" && <AuditTab audit={audit} />}
           </FadeSlideIn>
         </ScrollView>
       )}
 
       {navVisible ? (
         <BottomNav
-          tabs={NAV_TABS.map((item) =>
+          tabs={visibleTabs.map((item) =>
             item.key === "today" && inboxNewCount > 0 ? { ...item, badge: true } : item,
           )}
-          active={tab}
-          onSelect={(key) => setTab(key as Tab)}
+          active={effectiveTab}
+          onSelect={(key) => {
+            // "More" is the settings/profile hub, not a content tab.
+            if (key === "more") setSettingsEntry("index");
+            else setTab(key as Tab);
+          }}
           onPressEve={() => setVoiceVisible(true)}
           eveLabel="Talk to EVE"
         />
@@ -1039,30 +1247,73 @@ function EVEApp() {
         email={openEmail ? (briefing.emails.find((item) => item.id === openEmail.id) ?? openEmail) : null}
         visible={openEmail !== null}
         saving={saving}
+        focusReply={openEmailReply}
         onAction={(emailId, status) => void recordAction(emailId, status)}
         onClose={() => setOpenEmail(null)}
       />
 
       <VoiceScreen visible={voiceVisible} onClose={() => setVoiceVisible(false)} />
+
+      {/* Quick-create a task — the compose screen from the new design. Shown as
+          a floating action on Home; opens the full Create task modal. */}
+      {navVisible && effectiveTab === "today" ? (
+        <Pressable
+          onPress={() => setCreateTaskVisible(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Create a task"
+          style={[styles.fab, { backgroundColor: palette.primary }]}
+        >
+          <Ionicons name="add" size={28} color={palette.onPrimary} />
+        </Pressable>
+      ) : null}
+
+      <Modal
+        visible={createTaskVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setCreateTaskVisible(false)}
+      >
+        <CreateTaskScreen
+          onCancel={() => setCreateTaskVisible(false)}
+          onCreated={() => setCreateTaskVisible(false)}
+          onError={setApiError}
+        />
+      </Modal>
+      <Modal
+        visible={insightsVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setInsightsVisible(false)}
+      >
+        <EmailInsightsScreen
+          emails={briefing.emails}
+          onBack={() => setInsightsVisible(false)}
+          onOpenEmail={(e) => {
+            // Keep Email insights open underneath so closing the message
+            // returns here, not all the way out to Home.
+            setOpenEmailReply(false);
+            setOpenEmail(e);
+          }}
+          onDraft={(e) => {
+            // Same, but land on the reply/draft section of the message.
+            setOpenEmailReply(true);
+            setOpenEmail(e);
+          }}
+          onRefreshed={() => void loadV1()}
+        />
+      </Modal>
     </SafeAreaView>
   );
 }
 
-// Light wrapper around the shared apiFetch that adds a friendlier timeout
-// message — physical phones using localhost are the #1 source of timeouts.
+// Light wrapper around the shared apiFetch. Convex calls carry their own auth,
+// so the token argument is only consulted by the Node voice-bridge fallback.
 async function apiFetch<T>(
   path: string,
   init: RequestInit = {},
   token: string | null = tokenStore.current,
 ): Promise<T> {
-  try {
-    return await apiFetchClient<T>(path, init, token);
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 0) {
-      throw new Error(`API timed out at ${API_BASE_URL}. Use your computer LAN URL on a physical phone.`);
-    }
-    throw error;
-  }
+  return await apiFetchClient<T>(path, init, token);
 }
 
 function makeStyles({ palette }: ThemeValue) {
@@ -1081,5 +1332,20 @@ function makeStyles({ palette }: ThemeValue) {
     // scroller and a keyboard-avoiding composer, neither of which survives
     // being nested inside another ScrollView.
     flex: { flex: 1 },
+    fab: {
+      position: "absolute",
+      right: 20,
+      bottom: 108,
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      alignItems: "center",
+      justifyContent: "center",
+      elevation: 8,
+      shadowColor: "#000",
+      shadowOpacity: 0.2,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 6 },
+    },
   });
 }
