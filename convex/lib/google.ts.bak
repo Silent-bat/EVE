@@ -1,0 +1,175 @@
+/**
+ * Google API wrappers for Convex Actions
+ *
+ * Ported from services/api-node/src/google/api.mjs
+ */
+import { GOOGLE_SCOPES } from "./lib/googleScopes";
+
+const DEFAULT_GOOGLE_RESPONSE_MAX_BYTES = 2_000_000;
+
+export async function refreshGoogleToken(
+  googleTokens: any,
+  config: {
+    googleClientId?: string;
+    googleClientSecret?: string;
+  }
+): Promise<{ accessToken: string; googleTokens: any }> {
+  if (!googleTokens?.refresh_token) {
+    return { accessToken: googleTokens?.access_token, googleTokens };
+  }
+
+  if (googleTokens.expires_at && googleTokens.expires_at > Date.now() + 60_000) {
+    return { accessToken: googleTokens.access_token, googleTokens };
+  }
+
+  const clientID = config.googleClientId ?? googleTokens.client_id;
+  if (!clientID) {
+    return { accessToken: googleTokens.access_token, googleTokens };
+  }
+
+  const body = new URLSearchParams({
+    refresh_token: googleTokens.refresh_token,
+    client_id: clientID,
+    grant_type: "refresh_token",
+  });
+
+  if (config.googleClientSecret) {
+    body.set("client_secret", config.googleClientSecret);
+  }
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+
+  const text = await response.text();
+  if (text.length > DEFAULT_GOOGLE_RESPONSE_MAX_BYTES) {
+    throw new Error("google refresh response too large");
+  }
+
+  const payload = JSON.parse(text);
+  if (!response.ok) {
+    throw new Error(payload.error_description || payload.error || "google refresh failed");
+  }
+
+  const normalized = normalizeGoogleTokenPayload(payload);
+  const newTokens = {
+    ...googleTokens,
+    ...normalized,
+    refresh_token: normalized.refresh_token || googleTokens.refresh_token,
+    client_id: clientID,
+    needsReconnect: false,
+  };
+
+  return {
+    accessToken: newTokens.access_token,
+    googleTokens: newTokens,
+  };
+}
+
+export function normalizeGoogleTokenPayload(payload: any): any {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("invalid google token response");
+  }
+
+  const accessToken = payload.access_token;
+  if (typeof accessToken !== "string" || !accessToken.length) {
+    throw new Error("google token response missing access_token");
+  }
+
+  const expiresIn =
+    typeof payload.expires_in === "number" ? payload.expires_in :
+    typeof payload.expires_in === "string" ? Number(payload.expires_in) : 3600;
+
+  const expiresAt = Date.now() + Math.max(60, Math.min(Math.floor(expiresIn), 86400)) * 1000;
+
+  return {
+    access_token: accessToken,
+    refresh_token: typeof payload.refresh_token === "string" ? payload.refresh_token : undefined,
+    expires_at: expiresAt,
+    token_type: typeof payload.token_type === "string" ? payload.token_type : "Bearer",
+  };
+}
+
+export async function googleJSON(url: URL, accessToken: string) {
+  const response = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  const text = await response.text();
+  if (text.length > DEFAULT_GOOGLE_RESPONSE_MAX_BYTES) {
+    throw new Error("google response too large");
+  }
+
+  if (!response.ok) {
+    throw new Error(`google request failed: ${response.status} ${text}`);
+  }
+
+  return JSON.parse(text);
+}
+
+export function gmailMessageURL(id: string, format: string) {
+  return new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=${format}`);
+}
+
+export function headerValue(headers: any[], name: string) {
+  if (!Array.isArray(headers)) return "";
+  const header = headers.find(h => typeof h === "object" && h !== null && String(h.name).toLowerCase() === String(name).toLowerCase());
+  return header ? String(header.value || "") : "";
+}
+
+export function parseSender(from: string) {
+  if (!from || typeof from !== "string") {
+    return { name: "", email: "" };
+  }
+
+  const match = from.match(/^([^<]*)\s*<([^>]+)>$/);
+  if (match) {
+    return {
+      name: match[1].trim(),
+      email: match[2].trim().toLowerCase(),
+    };
+  }
+
+  if (from.includes("@")) {
+    return { name: "", email: from.toLowerCase() };
+  }
+
+  return { name: from.trim(), email: "" };
+}
+
+/**
+ * Simple map with concurrency limit
+ */
+export async function mapWithConcurrency<T, U>(
+  items: T[],
+  fn: (item: T) => Promise<U>,
+  concurrency: number
+): Promise<U[]> {
+  const results: U[] = [];
+  const inFlight = new Map<number, Promise<void>>();
+  let index = 0;
+
+  while (index < items.length || inFlight.size > 0) {
+    while (inFlight.size < concurrency && index < items.length) {
+      const i = index++;
+      const item = items[i];
+      const promise = (async () => {
+        try {
+          results[i] = await fn(item);
+        } finally {
+          inFlight.delete(i);
+        }
+      })();
+      inFlight.set(i, promise);
+    }
+    if (inFlight.size > 0) {
+      await Promise.race(inFlight.values());
+    }
+  }
+
+  return results;
+}

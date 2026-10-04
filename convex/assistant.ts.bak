@@ -1,0 +1,112 @@
+import { v } from "convex/values";
+import { mutation, query, action } from "./_generated/server";
+import { internal } from "./_generated/api";import { getAuthUserId } from "@convex-dev/auth/server";
+import { listMemory, rememberFact, forgetFact, TOOL_CATALOG, toolCatalogPrompt } from "./tools";
+import { normalizePreferences } from "./lib/scoring";
+
+/**
+ * Ask the assistant a question
+ */
+export const askAssistant = action({
+  args: {
+    prompt: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const user = await ctx.runQuery(internal.users.getUserInternal, { userId });
+    if (!user) throw new Error("User not found");
+
+    // Build context for the prompt
+    const profile = {
+      displayName: user.displayName,
+      email: user.email,
+      timezone: user.preferences?.timezone ?? "UTC",
+    };
+
+    const memories = listMemory(userId);
+    const memoryFacts = memories.map((m: any) => m.fact);
+
+    // Build the system prompt
+    const systemPrompt = `
+You are EVE, a personal operations assistant.
+
+You help the user manage their inbox, calendar, and tasks.
+
+You have access to these tools:
+${toolCatalogPrompt()}
+
+Rules:
+1. Never take an action without explicit user approval first
+2. When in doubt, ask the user for clarification
+3. Keep responses concise and helpful
+4. Use the local scoring fallback when no Gemini key is available
+5. Always return a final conversational answer to the user
+
+User profile:
+- Display name: ${profile.displayName}
+- Timezone: ${profile.timezone}
+
+User memories:
+${memoryFacts.map((f: string) => `- ${f}`).join("\n") || "(no memories yet)"}
+`;
+
+    // For now, use local heuristic fallback (we can add Gemini later)
+    // In production, use Gemini when key is available
+    const response = {
+      answer: args.prompt.includes("briefing")
+        ? "I can generate a briefing for you. Please connect your Google account to get started."
+        : "I'm EVE, your personal assistant. I can help you with your inbox, calendar, and tasks. What would you like to do?",
+      action: "answer",
+    };
+
+    return response;
+  },
+});
+
+/**
+ * Get preferences for the current user
+ */
+export const getPreferences = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("byUserId", q => q.eq("userId", userId))
+      .first();
+
+    return user?.preferences ?? normalizePreferences({ userId });
+  },
+});
+
+/**
+ * Update preferences for the current user
+ */
+export const updatePreferences = mutation({
+  args: {
+    preferences: v.any(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("byUserId", q => q.eq("userId", userId))
+      .first();
+
+    if (!user) throw new Error("User not found");
+
+    const current = user.preferences ?? normalizePreferences({ userId });
+    const merged = { ...current, ...args.preferences };
+    const normalized = normalizePreferences(merged);
+
+    await ctx.db.patch(user._id, { preferences: normalized });
+
+    return normalized;
+  },
+});
