@@ -28,7 +28,7 @@ import { registerPushToken } from "../notifications/push";
 import type { Preferences } from "../types";
 import { useTheme } from "../ui/ThemeContext";
 import { Aura, GhostAction, PrimaryAction, ProgressDots } from "./chrome";
-import { ConnectStep, PersonalizeStep, ReadyStep } from "./interactiveSteps";
+import { AboutStep, ConnectStep, PersonalizeStep, ReadyStep } from "./interactiveSteps";
 import { AccessStep, ValueStep, WelcomeStep } from "./steps";
 import { useEntryStyles } from "./styles";
 import {
@@ -38,7 +38,15 @@ import {
   type OnboardingStepId,
 } from "./storage";
 
-const STEPS: OnboardingStepId[] = ["welcome", "value", "access", "connect", "personalize", "ready"];
+const STEPS: OnboardingStepId[] = [
+  "welcome",
+  "value",
+  "access",
+  "connect",
+  "about",
+  "personalize",
+  "ready",
+];
 
 type Props = {
   userId: string | null;
@@ -51,6 +59,8 @@ type Props = {
   onRetry: () => void;
   onDismissError: () => void;
   onSavePreferences: (next: Preferences) => void;
+  /** Persists the onboarding "about you" answers to the user's profile. */
+  onSaveProfile?: (about: { role: string; focus: string; people: string }) => void;
   onDone: () => void;
   onSignOut: () => void;
 };
@@ -66,6 +76,7 @@ export function OnboardingFlow({
   onRetry,
   onDismissError,
   onSavePreferences,
+  onSaveProfile,
   onDone,
   onSignOut,
 }: Props) {
@@ -75,6 +86,10 @@ export function OnboardingFlow({
   const [step, setStep] = useState<OnboardingStepId>("welcome");
   const [briefingTime, setBriefingTime] = useState(preferences.briefingTime || "08:00");
   const [pushEnabled, setPushEnabled] = useState(preferences.pushEnabled !== false);
+  // "About you" onboarding answers → saved to the profile the agent reads.
+  const [aboutRole, setAboutRole] = useState("");
+  const [aboutFocus, setAboutFocus] = useState("");
+  const [aboutPeople, setAboutPeople] = useState("");
   const [finishing, setFinishing] = useState(false);
   const hydrated = useRef(false);
 
@@ -152,8 +167,16 @@ export function OnboardingFlow({
     goTo("ready");
   }, [briefingTime, goTo, onSavePreferences, preferences, pushEnabled]);
 
-  // Skip on the narrative steps jumps to the one step that can't be skipped.
-  const canSkip = step === "welcome" || step === "value" || step === "access";
+  // Gmail is optional (connect is skippable → simple mode), and the "about you"
+  // questions are optional too. Narrative steps skip straight to connect.
+  const canSkip =
+    step === "welcome" ||
+    step === "value" ||
+    step === "access" ||
+    step === "connect" ||
+    step === "about";
+  const skipTarget: OnboardingStepId =
+    step === "connect" ? "about" : step === "about" ? "personalize" : "connect";
 
   const primary = describePrimary({
     step,
@@ -171,7 +194,10 @@ export function OnboardingFlow({
       case "access":
         return goTo("connect");
       case "connect":
-        return googleConnected ? goTo("personalize") : onConnectGoogle();
+        return googleConnected ? goTo("about") : onConnectGoogle();
+      case "about":
+        onSaveProfile?.({ role: aboutRole, focus: aboutFocus, people: aboutPeople });
+        return goTo("personalize");
       case "personalize":
         return void leavePersonalize();
       case "ready":
@@ -193,7 +219,12 @@ export function OnboardingFlow({
           )}
           <ProgressDots total={STEPS.length} index={index} />
           {canSkip ? (
-            <GhostAction label="Skip" icon="chevron-forward" iconAfter onPress={() => goTo("connect")} />
+            <GhostAction
+              label={step === "connect" ? "Not now" : "Skip"}
+              icon="chevron-forward"
+              iconAfter
+              onPress={() => goTo(skipTarget)}
+            />
           ) : (
             <View style={{ width: 64 }} />
           )}
@@ -219,6 +250,12 @@ export function OnboardingFlow({
               onDismissError={onDismissError}
               onChangeBriefingTime={setBriefingTime}
               onChangePushEnabled={setPushEnabled}
+              aboutRole={aboutRole}
+              aboutFocus={aboutFocus}
+              aboutPeople={aboutPeople}
+              onChangeAboutRole={setAboutRole}
+              onChangeAboutFocus={setAboutFocus}
+              onChangeAboutPeople={setAboutPeople}
             />
           </View>
           <View style={styles.spacer} />
@@ -257,6 +294,12 @@ function StepBody({
   onDismissError,
   onChangeBriefingTime,
   onChangePushEnabled,
+  aboutRole,
+  aboutFocus,
+  aboutPeople,
+  onChangeAboutRole,
+  onChangeAboutFocus,
+  onChangeAboutPeople,
 }: {
   step: OnboardingStepId;
   email: string | null;
@@ -270,6 +313,12 @@ function StepBody({
   onDismissError: () => void;
   onChangeBriefingTime: (next: string) => void;
   onChangePushEnabled: (next: boolean) => void;
+  aboutRole: string;
+  aboutFocus: string;
+  aboutPeople: string;
+  onChangeAboutRole: (v: string) => void;
+  onChangeAboutFocus: (v: string) => void;
+  onChangeAboutPeople: (v: string) => void;
 }) {
   switch (step) {
     case "welcome":
@@ -288,6 +337,17 @@ function StepBody({
           onConnect={onConnectGoogle}
           onRetry={onRetry}
           onDismissError={onDismissError}
+        />
+      );
+    case "about":
+      return (
+        <AboutStep
+          role={aboutRole}
+          focus={aboutFocus}
+          people={aboutPeople}
+          onChangeRole={onChangeAboutRole}
+          onChangeFocus={onChangeAboutFocus}
+          onChangePeople={onChangeAboutPeople}
         />
       );
     case "personalize":
@@ -325,6 +385,8 @@ function describePrimary({
       return googleConnected
         ? { label: "Continue", icon: "arrow-forward" }
         : { label: "Connect Google", busy: saving };
+    case "about":
+      return { label: "Continue", icon: "arrow-forward" };
     case "personalize":
       return { label: "Continue", icon: "arrow-forward" };
     case "ready":

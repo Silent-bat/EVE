@@ -15,7 +15,14 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const STORAGE_KEY = "eve.onboarding.v1";
 
-export type OnboardingStepId = "welcome" | "value" | "access" | "connect" | "personalize" | "ready";
+export type OnboardingStepId =
+  | "welcome"
+  | "value"
+  | "access"
+  | "connect"
+  | "about"
+  | "personalize"
+  | "ready";
 
 export type OnboardingProgress = {
   /** Owner of this record. Null until the session tells us the real id. */
@@ -94,6 +101,7 @@ function isStepId(value: unknown): value is OnboardingStepId {
     value === "value" ||
     value === "access" ||
     value === "connect" ||
+    value === "about" ||
     value === "personalize" ||
     value === "ready"
   );

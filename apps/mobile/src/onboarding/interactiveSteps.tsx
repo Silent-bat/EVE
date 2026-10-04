@@ -3,7 +3,7 @@
  * preferences that shape the daily brief, and confirm.
  */
 import { Ionicons } from "@expo/vector-icons";
-import { Pressable, Switch, Text, View } from "react-native";
+import { Pressable, Switch, Text, TextInput, View } from "react-native";
 
 import { ErrorBanner } from "../ui/primitives";
 import { FadeSlideIn } from "../ui/motion";
@@ -197,6 +197,82 @@ export function PersonalizeStep({
             />
           </View>
         </View>
+      </FadeSlideIn>
+    </View>
+  );
+}
+
+// ----------------------------------------------------------------- about
+
+/**
+ * EVE introduces itself and asks a few questions so it knows the user from the
+ * first conversation. Free-text, all optional — answers seed the profile the
+ * assistant + voice agent read on every turn. Skippable.
+ */
+export function AboutStep({
+  role,
+  focus,
+  people,
+  onChangeRole,
+  onChangeFocus,
+  onChangePeople,
+}: {
+  role: string;
+  focus: string;
+  people: string;
+  onChangeRole: (v: string) => void;
+  onChangeFocus: (v: string) => void;
+  onChangePeople: (v: string) => void;
+}) {
+  const { palette } = useTheme();
+  const styles = useEntryStyles();
+
+  const field = (
+    label: string,
+    placeholder: string,
+    value: string,
+    onChange: (v: string) => void,
+    multiline = false,
+  ) => (
+    <View style={{ gap: 6 }}>
+      <Text style={styles.featureTitle}>{label}</Text>
+      <TextInput
+        style={[styles.input, multiline && { minHeight: 72 }]}
+        value={value}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        placeholderTextColor={palette.textMuted}
+        multiline={multiline}
+        autoCapitalize="sentences"
+      />
+    </View>
+  );
+
+  return (
+    <View style={{ gap: 18 }}>
+      <FadeSlideIn>
+        <Eyebrow>Meet EVE</Eyebrow>
+      </FadeSlideIn>
+      <FadeSlideIn delay={70}>
+        <Text style={styles.heading} accessibilityRole="header">
+          Tell me a little about you
+        </Text>
+      </FadeSlideIn>
+      <FadeSlideIn delay={130}>
+        <Text style={styles.lead}>
+          A few quick answers help me be useful from day one. All optional — you can add or change these
+          anytime, and I'll keep learning as we talk.
+        </Text>
+      </FadeSlideIn>
+
+      <FadeSlideIn delay={190}>
+        {field("What do you do?", "e.g. Founder at a fintech startup", role, onChangeRole)}
+      </FadeSlideIn>
+      <FadeSlideIn delay={240}>
+        {field("What are you focused on right now?", "e.g. Closing our seed round; hiring 2 engineers", focus, onChangeFocus, true)}
+      </FadeSlideIn>
+      <FadeSlideIn delay={290}>
+        {field("Who do you work with most?", "e.g. Sarah (cofounder), the design team", people, onChangePeople, true)}
       </FadeSlideIn>
     </View>
   );

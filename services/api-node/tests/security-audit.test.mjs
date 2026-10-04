@@ -14,7 +14,7 @@ import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import pino from "pino";
 
-import { readJSON, writeAuthRedirect } from "../src/http/responses.mjs";
+import { readJSON, writeAuthRedirect, writeGoogleConnectedRedirect } from "../src/http/responses.mjs";
 import { redactURL, writeErrorResponse } from "../src/http/middleware.mjs";
 import {
   MAX_OAUTH_STATES,
@@ -82,6 +82,35 @@ test("finding 2 — the redirect helper fails closed for an unallowlisted URL", 
   assert.equal(response.statusCode, 200);
   assert.ok(!response.headers.Location);
   assert.ok(!response.body.includes("HANDOFFCODE123"));
+});
+
+test("Google connection returns a marker to the authenticated app", () => {
+  const response = fakeResponse();
+  writeGoogleConnectedRedirect(/** @type {any} */ (response), "eve://auth/google");
+
+  assert.equal(response.statusCode, 302);
+  assert.equal(response.headers.Location, "eve://auth/google#google_connected=1");
+  assert.equal(response.headers["Cache-Control"], "no-store");
+  assert.equal(response.headers["Referrer-Policy"], "no-referrer");
+  assert.ok(!response.headers.Location.includes("code="));
+  assert.ok(!response.headers.Location.includes("token="));
+});
+
+test("Google connection redirect preserves an allowed web callback query", () => {
+  const response = fakeResponse();
+  writeGoogleConnectedRedirect(/** @type {any} */ (response), "http://localhost:8081/callback?flow=connect");
+
+  assert.equal(response.statusCode, 302);
+  assert.equal(response.headers.Location, "http://localhost:8081/callback?flow=connect#google_connected=1");
+});
+
+test("Google connection redirect fails closed for an unallowlisted URL", () => {
+  const response = fakeResponse();
+  writeGoogleConnectedRedirect(/** @type {any} */ (response), "eve://other-app/callback");
+
+  assert.equal(response.statusCode, 200);
+  assert.ok(!response.headers.Location);
+  assert.ok(!response.body.includes("google_connected"));
 });
 
 test("finding 2 — OAuth handoffs are single-use and reject malformed codes", () => {
