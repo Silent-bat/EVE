@@ -1,43 +1,108 @@
 /**
- * useGeminiLive — mobile-side client for the /v1/voice/live WebSocket.
+ * useGeminiLive — mobile-side client for a DIRECT Gemini Live connection.
  *
- * Owns the WS lifecycle, accumulates streaming transcripts and audio
- * chunks, and emits a small state machine so VoiceScreen can render
- * status without caring about the wire format. Reuses the existing
- * tokenStore for auth and reconnects a dropped foreground session with bounded
- * backoff; disabling the session or backgrounding the app tears it down.
+ * The Node WebSocket relay is gone. The phone now:
+ *   1. asks Convex (api.voice.mintLiveToken) for a short-lived ephemeral token
+ *      — the token locks the model, system instruction, and tool catalog
+ *      server-side, so none of that lives on the device;
+ *   2. opens the Gemini Live WebSocket directly with that token; and
+ *   3. when Gemini asks to run a tool, dispatches it back to Convex
+ *      (api.voice.runVoiceTool) and returns the result as a tool_response.
+ *
+ * The public shape (status, errorMessage, turns, sendText, interrupt,
+ * clearTurns) is unchanged, so VoiceScreen / VoiceDock keep working. The mic
+ * path is unchanged too: callers still transcribe audio via Convex and feed
+ * text in through sendText — only text turns go over this socket; Gemini's
+ * audio reply comes back as base64 PCM chunks.
  *
  * State machine:
  *   idle       — connected, waiting for the user to do something
  *   thinking   — text submitted, Gemini hasn't started replying yet
  *   speaking   — receiving audio chunks (we also have transcript by now)
- *   connecting — initial open before the server says "ready"
+ *   connecting — minting a token / initial open before setup_complete
  *   error      — see errorMessage
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 
-import { assertSecureTransport, config } from "../config";
-import { tokenStore } from "../api/client";
+import { convex, api } from "../api/convexApi";
 import { readCache, readLastUserID, writeCache } from "../storage/localCache";
 
 export type LiveStatus = "connecting" | "idle" | "thinking" | "speaking" | "error";
 
+/**
+ * Gemini Live WebSocket endpoint for EPHEMERAL TOKENS. Two things differ from
+ * a normal API-key connection: the method is `BidiGenerateContentConstrained`
+ * (the token locks the setup), and the token rides in `?access_token=`. Auth
+ * tokens are a v1alpha feature. Verified against the live API — a normal
+ * `BidiGenerateContent` URL returns close 1008 "unregistered caller" for a
+ * token.
+ */
+const GEMINI_LIVE_ENDPOINT =
+  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
+
 /** First reconnect delay. Doubles per attempt, so a blip costs half a second. */
 const BASE_BACKOFF_MS = 500;
 
-/** Ceiling on the backoff, so a dead server is retried without hammering it. */
+/** Ceiling on the backoff, so a dead connection is retried without hammering it. */
 const MAX_BACKOFF_MS = 15_000;
 
 /**
  * Consecutive failures before the user is told. Gemini Live sessions end on
  * their own schedule and reconnect in well under a second, which is not worth a
- * banner; a server that is actually down keeps failing and earns one.
+ * banner; a connection that is actually down keeps failing and earns one.
  */
 const MAX_QUIET_RETRIES = 3;
 
-/** Do not leave a queued follow-up blocked forever if the bridge drops its ack. */
+/** Do not leave a queued follow-up blocked forever if an ack never lands. */
 const INTERRUPT_ACK_TIMEOUT_MS = 2_000;
+
+/**
+ * Decode a WebSocket frame to text. Gemini Live sends its JSON envelopes as
+ * BINARY frames; with binaryType="arraybuffer" React Native hands us an
+ * ArrayBuffer, which we decode as UTF-8. Plain string frames pass through.
+ */
+function decodeWsData(data: unknown): string {
+  if (typeof data === "string") return data;
+  if (data instanceof ArrayBuffer) {
+    try {
+      if (typeof TextDecoder !== "undefined") {
+        return new TextDecoder("utf-8").decode(new Uint8Array(data));
+      }
+    } catch {
+      // fall through to the manual decoder
+    }
+    return utf8FromBytes(new Uint8Array(data));
+  }
+  return "";
+}
+
+/** Minimal UTF-8 decoder fallback for runtimes without TextDecoder. */
+function utf8FromBytes(bytes: Uint8Array): string {
+  let out = "";
+  let i = 0;
+  while (i < bytes.length) {
+    const b = bytes[i++] ?? 0;
+    if (b < 0x80) {
+      out += String.fromCharCode(b);
+    } else if (b >= 0xc0 && b < 0xe0) {
+      out += String.fromCharCode(((b & 0x1f) << 6) | ((bytes[i++] ?? 0) & 0x3f));
+    } else if (b >= 0xe0 && b < 0xf0) {
+      out += String.fromCharCode(
+        ((b & 0x0f) << 12) | (((bytes[i++] ?? 0) & 0x3f) << 6) | ((bytes[i++] ?? 0) & 0x3f),
+      );
+    } else {
+      const cp =
+        ((b & 0x07) << 18) |
+        (((bytes[i++] ?? 0) & 0x3f) << 12) |
+        (((bytes[i++] ?? 0) & 0x3f) << 6) |
+        ((bytes[i++] ?? 0) & 0x3f);
+      const c = cp - 0x10000;
+      out += String.fromCharCode(0xd800 + (c >> 10), 0xdc00 + (c & 0x3ff));
+    }
+  }
+  return out;
+}
 
 export type LiveTurn = {
   id: string;
@@ -78,10 +143,11 @@ export function useGeminiLive({ enabled, onError, onAudioResponse, onAudioChunk,
   const interruptionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [appActive, setAppActive] = useState(AppState.currentState === "active");
   const appActiveRef = useRef(appActive);
-  /** Consecutive failed connects, reset by a session that reaches "ready". */
+  /** Debounce timer for sustained-background detection (see AppState effect). */
+  const bgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Consecutive failed connects, reset by a session that reaches setup_complete. */
   const attempt = useRef(0);
-  // Capture onError/onAudioResponse in a ref so the effect doesn't
-  // re-run every render. The connect cycle is heavy.
+  // Capture callbacks in a ref so the effect doesn't re-run every render.
   const callbacks = useRef({ onError, onAudioResponse, onAudioChunk, onAudioComplete });
   useEffect(() => {
     callbacks.current = { onError, onAudioResponse, onAudioChunk, onAudioComplete };
@@ -105,18 +171,40 @@ export function useGeminiLive({ enabled, onError, onAudioResponse, onAudioChunk,
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (next) => {
-      const active = next === "active";
-      // Update synchronously as well as through state. A native socket can
-      // deliver one final event before React commits the AppState render.
-      appActiveRef.current = active;
-      setAppActive(active);
+      if (next === "active") {
+        // Back in foreground (or a flicker resolved) — cancel any pending
+        // teardown and keep/restore the live session.
+        if (bgTimerRef.current) {
+          clearTimeout(bgTimerRef.current);
+          bgTimerRef.current = null;
+        }
+        appActiveRef.current = true;
+        setAppActive(true);
+        return;
+      }
+      // Debounce backgrounding. Acquiring the microphone flips AppState to
+      // "background" for a few hundred ms on some devices; tearing the socket
+      // down on that flicker caused a connect→ready→close→reconnect loop. Only
+      // a SUSTAINED background is a real teardown, so the session stays up while
+      // the user is signed in and using voice.
+      if (bgTimerRef.current) return;
+      bgTimerRef.current = setTimeout(() => {
+        bgTimerRef.current = null;
+        appActiveRef.current = false;
+        setAppActive(false);
+      }, 1500);
     });
-    return () => subscription.remove();
+    return () => {
+      subscription.remove();
+      if (bgTimerRef.current) {
+        clearTimeout(bgTimerRef.current);
+        bgTimerRef.current = null;
+      }
+    };
   }, []);
 
-  // Restore prior conversation turns from disk so the user sees their
-  // last voice session as soon as the modal opens, before the WS even
-  // connects. Runs once per enabled cycle.
+  // Restore prior conversation turns from disk so the user sees their last
+  // voice session as soon as the modal opens, before the socket even connects.
   useEffect(() => {
     if (!enabled || !appActive) return;
     let active = true;
@@ -134,25 +222,16 @@ export function useGeminiLive({ enabled, onError, onAudioResponse, onAudioChunk,
     };
   }, [enabled, appActive]);
 
-  // Open / tear down the WS based on `enabled` (typically: modal visible).
-  //
-  // Reconnection is not a nicety here, it is what makes the always-listening
-  // dock work at all. A Gemini Live session is not open-ended: it ends on its
-  // own time limit, and sends `go_away` first, which the bridge turns into a
-  // close. Backgrounding the app, a network change, or a Metro reload do the
-  // same thing. Without this, the first such close was permanent — status went
-  // to "error", the dock's mic gate never reopened, and EVE was silent until
-  // the app restarted, while the header cheerfully claimed "Reconnecting".
+  // Open / tear down the connection based on `enabled` (typically: modal
+  // visible) and foreground state. A Gemini Live session is not open-ended: it
+  // ends on its own time limit and sends go_away first. Backgrounding, a
+  // network change, or token expiry do the same. Reconnection with bounded
+  // backoff is what keeps the always-listening dock working across all of that.
   useEffect(() => {
-    // A backgrounded React Native app must not hold or recreate a billable
-    // Gemini session. AppState changes re-run this effect, so its cleanup
-    // closes the foreground socket before this guard is evaluated.
+    // A backgrounded RN app must not hold or recreate a billable Gemini
+    // session. AppState changes re-run this effect; its cleanup closes the
+    // foreground socket before this guard is evaluated.
     if (!enabled || !appActive) return;
-    // Browser WebSocket deliberately does not expose an API for arbitrary
-    // upgrade headers. The API accepts bearer auth only in that header, so a
-    // web client cannot safely establish this session until a short-lived
-    // ticket/cookie handshake exists. Fail explicitly instead of attempting an
-    // unauthenticated socket or putting the long-lived token in the URL.
     if (Platform.OS === "web") {
       const message = "Voice mode is available in the mobile app only.";
       setStatus("error");
@@ -160,65 +239,87 @@ export function useGeminiLive({ enabled, onError, onAudioResponse, onAudioChunk,
       callbacks.current.onError?.(message);
       return;
     }
-    const token = tokenStore.current;
-    if (!token) {
-      setStatus("error");
-      setErrorMessage("Sign in before opening voice mode.");
-      return;
-    }
 
     let cancelled = false;
     let socket: WebSocket | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const open = () => {
+    const open = async () => {
       if (cancelled || !appActiveRef.current) return;
       setStatus("connecting");
       setErrorMessage(null);
 
-      // Put the bearer token in the upgrade header rather than the URL. Query
-      // strings are routinely copied into proxy/access logs and browser history.
-      const WebSocketCtor = WebSocket as unknown as {
-        new (
-          url: string,
-          protocols?: string | string[],
-          options?: { headers?: Record<string, string> },
-        ): WebSocket;
-      };
-      const ws = new WebSocketCtor(buildLiveUrl(), undefined, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      // Mint a fresh ephemeral token per connection. Tokens are single-use
+      // (uses:1), so each (re)connect needs its own; the real API key stays on
+      // Convex. A failure here (not signed in, no GEMINI_API_KEY) is terminal
+      // for this attempt and flows into the normal retry/backoff path.
+      let token: string;
+      try {
+        const minted = await convex.action(api.voice.mintLiveToken, {});
+        token = minted.token;
+      } catch (err) {
+        if (cancelled || !appActiveRef.current) return;
+        const message = err instanceof Error ? err.message : "Could not start voice.";
+        // Not-signed-in is a hard stop, not a transient blip.
+        if (/not authenticated/i.test(message)) {
+          setStatus("error");
+          setErrorMessage("Sign in before opening voice mode.");
+          return;
+        }
+        retry();
+        return;
+      }
+      if (cancelled || !appActiveRef.current) return;
+
+      const url = `${GEMINI_LIVE_ENDPOINT}?access_token=${encodeURIComponent(token)}`;
+      console.log("[voice] minted token len", token.length, "→ opening WS");
+      const ws = new WebSocket(url);
+      // Gemini Live sends its JSON envelopes as BINARY frames. React Native
+      // delivers those as a Blob by default (which JSON.parse can't read);
+      // ask for ArrayBuffers so we can decode them to text deterministically.
+      (ws as unknown as { binaryType: string }).binaryType = "arraybuffer";
       socket = ws;
       wsRef.current = ws;
 
       ws.onopen = () => {
-        // Wait for the server's "ready" envelope before flipping state —
-        // the Gemini handshake takes ~200-500ms after the socket opens.
+        // The ephemeral token locks the entire setup (model, system
+        // instruction, tools, audio config) server-side, so the client sends
+        // an EMPTY setup — sending a model here conflicts with the constrained
+        // token. Status stays "connecting" until Gemini answers setup_complete.
+        console.log("[voice] WS open → sending empty setup");
+        try {
+          ws.send(JSON.stringify({ setup: {} }));
+        } catch (e) {
+          console.warn("[voice] setup send failed", String(e));
+          // close handler owns the retry
+        }
       };
 
-      ws.onmessage = (event) => {
-        // `close()` is asynchronous on React Native. Ignore a late event from
-        // a socket torn down by a background transition or retry.
+      ws.onmessage = (event: any) => {
+        // close() is asynchronous on RN. Ignore a late event from a socket torn
+        // down by a background transition or retry.
         if (cancelled || !appActiveRef.current || wsRef.current !== ws) return;
+        const raw = decodeWsData(event?.data);
+        if (!raw) return;
         let msg: any;
         try {
-          msg = JSON.parse(typeof event.data === "string" ? event.data : "");
+          msg = JSON.parse(raw);
         } catch {
           return;
         }
-        handleMessage(msg);
+        handleServerMessage(msg, ws);
       };
 
       // An error is always followed by a close, so let close own the retry.
-      // Surfacing every transient drop to the user would turn an invisible
-      // reconnect into a stream of banners.
-      ws.onerror = () => {};
+      ws.onerror = (e: any) => {
+        console.warn("[voice] WS error", e?.message ?? String(e));
+      };
 
-      ws.onclose = () => {
+      ws.onclose = (e: any) => {
+        console.warn("[voice] WS close code", e?.code, "reason", e?.reason);
         if (wsRef.current !== ws) return;
         wsRef.current = null;
         if (cancelled || !appActiveRef.current) return;
-        // A turn that was mid-flight is gone with the socket.
         invalidateResponse();
         audioBuffer.current = [];
         audioBytes.current = 0;
@@ -231,22 +332,22 @@ export function useGeminiLive({ enabled, onError, onAudioResponse, onAudioChunk,
     const retry = () => {
       if (cancelled || !appActiveRef.current) return;
       attempt.current += 1;
-      // Only complain once it has stopped looking like a blip.
       if (attempt.current === MAX_QUIET_RETRIES) {
-        setErrorMessage("Voice connection keeps dropping. Check the API server.");
+        setErrorMessage("Voice connection keeps dropping. Check your network.");
         callbacks.current.onError?.("Voice connection keeps dropping.");
       }
       const wait = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** Math.min(attempt.current - 1, 6));
       setStatus("connecting");
       retryTimer = setTimeout(() => {
         retryTimer = null;
-        open();
+        void open();
       }, wait);
     };
 
-    open();
+    void open();
 
     return () => {
+      console.log("[voice] effect teardown (enabled/appActive changed or unmount)");
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
       invalidateResponse();
@@ -261,118 +362,187 @@ export function useGeminiLive({ enabled, onError, onAudioResponse, onAudioChunk,
       currentAgentTurnId.current = null;
       currentUserTurnId.current = null;
     };
-    // Keyed on `enabled` and foreground state: the socket's lifetime is the
-    // active session's, and callback identity changes must not drop it.
   }, [enabled, appActive, invalidateResponse]);
 
-  function handleMessage(msg: any) {
-    switch (msg.type) {
-      case "ready":
-        // A session that got this far was a real one, so the backoff starts
-        // from scratch next time rather than compounding across the day.
-        attempt.current = 0;
-        setErrorMessage(null);
-        setStatus("idle");
-        break;
-      case "input-transcript": {
-        if (droppingInterruptedResponseRef.current || typeof msg.text !== "string" || !msg.text) return;
-        // Gemini Live streams incremental transcript text. We append to
-        // a single user turn that represents the current spoken input.
-        setTurns((current) => {
-          if (currentUserTurnId.current) {
-            return current.map((t) =>
-              t.id === currentUserTurnId.current ? { ...t, text: t.text + msg.text } : t,
-            );
-          }
-          const id = `u-${Date.now()}`;
-          currentUserTurnId.current = id;
-          return [...current, { id, role: "user", text: msg.text }];
-        });
-        break;
-      }
-      case "output-transcript": {
-        if (droppingInterruptedResponseRef.current || typeof msg.text !== "string" || !msg.text) return;
-        setTurns((current) => {
-          if (currentAgentTurnId.current) {
-            return current.map((t) =>
-              t.id === currentAgentTurnId.current ? { ...t, text: t.text + msg.text } : t,
-            );
-          }
-          const id = `a-${responseGenerationRef.current}-${Date.now()}`;
-          currentAgentTurnId.current = id;
-          return [...current, { id, role: "agent", text: msg.text }];
-        });
-        break;
-      }
-      case "audio":
-        // `interrupt()` invalidates the active response immediately, but the
-        // bridge can still deliver frames already in flight until it emits its
-        // acknowledgement. Never hand those frames to the speaker.
-        if (droppingInterruptedResponseRef.current) break;
-        if (
-          typeof msg.data === "string" &&
-          msg.data.length <= 256 * 1024 &&
-          /^[A-Za-z0-9+/]*={0,2}$/.test(msg.data) &&
-          msg.data.length % 4 !== 1
-        ) {
-          const generation = responseGenerationRef.current;
-          if (activeAudioGenerationRef.current !== null && activeAudioGenerationRef.current !== generation) {
-            break;
-          }
-          activeAudioGenerationRef.current = generation;
-          audioBytes.current += Math.ceil((msg.data.length * 3) / 4);
-          if (audioBytes.current > 4 * 1024 * 1024) return;
-          audioBuffer.current.push(msg.data);
-          callbacks.current.onAudioChunk?.(msg.data);
-          setStatus("speaking");
+  /**
+   * Translate a Gemini Live server message into transcript/audio/tool effects.
+   * v1beta is protobuf-derived: field names arrive snake_case (setup_complete,
+   * server_content, model_turn, inline_data, ...). Read both shapes defensively
+   * so this survives a future camelCase flip.
+   */
+  function handleServerMessage(msg: any, ws: WebSocket) {
+    if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
+
+    if (msg.setup_complete || msg.setupComplete) {
+      // A session that got this far was a real one, so backoff starts fresh.
+      console.log("[voice] setup_complete → ready");
+      attempt.current = 0;
+      setErrorMessage(null);
+      setStatus("idle");
+      return;
+    }
+
+    const content = msg.server_content || msg.serverContent;
+    if (content) {
+      const modelTurn = content.model_turn || content.modelTurn;
+      const parts = Array.isArray(modelTurn?.parts) ? modelTurn.parts : [];
+      for (const part of parts) {
+        if (!part || typeof part !== "object" || Array.isArray(part)) continue;
+        const inline = part.inline_data || part.inlineData;
+        if (typeof inline?.data === "string" && inline.data) {
+          handleAudioChunk(inline.data);
+        } else if (typeof part.text === "string" && part.text) {
+          appendAgentTranscript(part.text);
         }
-        break;
-      case "turn-complete": {
-        if (droppingInterruptedResponseRef.current) break;
-        const chunks = audioBuffer.current;
-        audioBuffer.current = [];
-        audioBytes.current = 0;
-        currentAgentTurnId.current = null;
-        currentUserTurnId.current = null;
-        activeAudioGenerationRef.current = null;
-        responsePendingRef.current = false;
-        if (chunks.length > 0) {
-          if (callbacks.current.onAudioChunk || callbacks.current.onAudioComplete) {
-            callbacks.current.onAudioComplete?.();
-          } else {
-            callbacks.current.onAudioResponse?.(chunks);
-          }
-        }
-        setStatus("idle");
-        // Persist after the turn settles — the in-progress deltas write
-        // every keystroke otherwise, which is wasteful.
-        const uid = userIDRef.current;
-        if (uid) {
-          setTurns((current) => {
-            void writeCache(uid, "voiceTurns", current);
-            return current;
-          });
-        }
-        break;
       }
-      case "interrupted":
-        // User barge-in. Throw away any audio we hadn't flushed yet.
-        audioBuffer.current = [];
-        audioBytes.current = 0;
-        activeAudioGenerationRef.current = null;
-        interruptionPendingRef.current = false;
-        droppingInterruptedResponseRef.current = false;
-        clearInterruptionTimer();
-        setStatus(responsePendingRef.current ? "thinking" : "idle");
-        break;
-      case "error":
-        setStatus("error");
-        setErrorMessage(typeof msg.message === "string" ? msg.message : "Voice error");
-        callbacks.current.onError?.(typeof msg.message === "string" ? msg.message : "Voice error");
-        break;
-      default:
-        // Forward-compatible — unknown types ignored.
-        break;
+
+      const inputT = content.input_transcription || content.inputTranscription;
+      if (typeof inputT?.text === "string" && inputT.text) appendUserTranscript(inputT.text);
+
+      const outputT = content.output_transcription || content.outputTranscription;
+      if (typeof outputT?.text === "string" && outputT.text) appendAgentTranscript(outputT.text);
+
+      if (content.turn_complete || content.turnComplete) handleTurnComplete();
+      if (content.interrupted) handleInterrupted();
+      return;
+    }
+
+    const toolCall = msg.tool_call || msg.toolCall;
+    if (toolCall) {
+      void handleToolCall(toolCall, ws);
+      return;
+    }
+
+    // go_away precedes a server-side close; let the socket close and reconnect.
+    if (msg.go_away || msg.goAway) {
+      try {
+        ws.close();
+      } catch {
+        // best-effort
+      }
+      return;
+    }
+  }
+
+  function appendUserTranscript(text: string) {
+    if (droppingInterruptedResponseRef.current) return;
+    setTurns((current) => {
+      if (currentUserTurnId.current) {
+        return current.map((t) =>
+          t.id === currentUserTurnId.current ? { ...t, text: t.text + text } : t,
+        );
+      }
+      const id = `u-${Date.now()}`;
+      currentUserTurnId.current = id;
+      return [...current, { id, role: "user", text }];
+    });
+  }
+
+  function appendAgentTranscript(text: string) {
+    if (droppingInterruptedResponseRef.current) return;
+    setTurns((current) => {
+      if (currentAgentTurnId.current) {
+        return current.map((t) =>
+          t.id === currentAgentTurnId.current ? { ...t, text: t.text + text } : t,
+        );
+      }
+      const id = `a-${responseGenerationRef.current}-${Date.now()}`;
+      currentAgentTurnId.current = id;
+      return [...current, { id, role: "agent", text }];
+    });
+  }
+
+  function handleAudioChunk(data: string) {
+    // interrupt() invalidates the active response immediately, but frames
+    // already in flight can still arrive. Never hand those to the speaker.
+    if (droppingInterruptedResponseRef.current) return;
+    if (
+      typeof data === "string" &&
+      data.length <= 256 * 1024 &&
+      /^[A-Za-z0-9+/]*={0,2}$/.test(data) &&
+      data.length % 4 !== 1
+    ) {
+      const generation = responseGenerationRef.current;
+      if (activeAudioGenerationRef.current !== null && activeAudioGenerationRef.current !== generation) {
+        return;
+      }
+      activeAudioGenerationRef.current = generation;
+      audioBytes.current += Math.ceil((data.length * 3) / 4);
+      if (audioBytes.current > 4 * 1024 * 1024) return;
+      audioBuffer.current.push(data);
+      callbacks.current.onAudioChunk?.(data);
+      setStatus("speaking");
+    }
+  }
+
+  function handleTurnComplete() {
+    if (droppingInterruptedResponseRef.current) return;
+    const chunks = audioBuffer.current;
+    audioBuffer.current = [];
+    audioBytes.current = 0;
+    currentAgentTurnId.current = null;
+    currentUserTurnId.current = null;
+    activeAudioGenerationRef.current = null;
+    responsePendingRef.current = false;
+    if (chunks.length > 0) {
+      if (callbacks.current.onAudioChunk || callbacks.current.onAudioComplete) {
+        callbacks.current.onAudioComplete?.();
+      } else {
+        callbacks.current.onAudioResponse?.(chunks);
+      }
+    }
+    setStatus("idle");
+    const uid = userIDRef.current;
+    if (uid) {
+      setTurns((current) => {
+        void writeCache(uid, "voiceTurns", current);
+        return current;
+      });
+    }
+  }
+
+  function handleInterrupted() {
+    audioBuffer.current = [];
+    audioBytes.current = 0;
+    activeAudioGenerationRef.current = null;
+    interruptionPendingRef.current = false;
+    droppingInterruptedResponseRef.current = false;
+    clearInterruptionTimer();
+    setStatus(responsePendingRef.current ? "thinking" : "idle");
+  }
+
+  /**
+   * Fulfil a Gemini tool_call by dispatching each function to Convex and
+   * sending the results back as a tool_response over the same socket.
+   */
+  async function handleToolCall(toolCall: any, ws: WebSocket) {
+    const calls = Array.isArray(toolCall.function_calls)
+      ? toolCall.function_calls
+      : Array.isArray(toolCall.functionCalls)
+        ? toolCall.functionCalls
+        : [];
+    if (calls.length === 0) return;
+
+    const responses: Array<{ id: string; name: string; response: { result: unknown } }> = [];
+    for (const call of calls) {
+      if (!call || typeof call !== "object") continue;
+      const name = typeof call.name === "string" ? call.name.slice(0, 200) : "";
+      const id = typeof call.id === "string" ? call.id.slice(0, 200) : "";
+      if (!name || !id) continue;
+      let result: unknown;
+      try {
+        result = await convex.action(api.voice.runVoiceTool, { name, args: call.args || {} });
+      } catch (err) {
+        result = { ok: false, error: err instanceof Error ? err.message : "voice tool failed" };
+      }
+      responses.push({ id, name, response: { result: result ?? null } });
+    }
+
+    if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({ tool_response: { function_responses: responses } }));
+    } catch {
+      // best-effort; a dropped socket reconnects on its own
     }
   }
 
@@ -389,21 +559,24 @@ export function useGeminiLive({ enabled, onError, onAudioResponse, onAudioChunk,
     responseGenerationRef.current += 1;
     activeAudioGenerationRef.current = null;
     responsePendingRef.current = true;
-    // If this follows an interrupt, keep dropping frames until the bridge's
-    // acknowledgement arrives. Without this boundary, a late old frame can
-    // be mistaken for the new answer and restart playback after barge-in.
     if (!interruptionPendingRef.current) droppingInterruptedResponseRef.current = false;
     audioBuffer.current = [];
     audioBytes.current = 0;
     currentAgentTurnId.current = null;
     setStatus("thinking");
-    // We record the user's turn locally for transcript display before
-    // the model echoes it back via input-transcript (the model only
-    // emits input-transcript for actual spoken audio, not for text).
+    // Record the user's turn locally for transcript display; Gemini only emits
+    // input_transcription for actual spoken audio, not for injected text.
     const id = `u-${Date.now()}`;
     setTurns((current) => [...current, { id, role: "user", text: trimmed }]);
     try {
-      ws.send(JSON.stringify({ type: "text", text: trimmed }));
+      ws.send(
+        JSON.stringify({
+          client_content: {
+            turns: [{ role: "user", parts: [{ text: trimmed }] }],
+            turn_complete: true,
+          },
+        }),
+      );
     } catch {
       responsePendingRef.current = false;
       setStatus("error");
@@ -425,9 +598,6 @@ export function useGeminiLive({ enabled, onError, onAudioResponse, onAudioChunk,
     interruptionTimerRef.current = setTimeout(() => {
       interruptionTimerRef.current = null;
       interruptionPendingRef.current = false;
-      // Keep the old response quarantined until a follow-up turn is actually
-      // requested. If no text is pending, clearing this here would let a very
-      // late frame restart playback after the user had already interrupted.
       if (responsePendingRef.current) droppingInterruptedResponseRef.current = false;
     }, INTERRUPT_ACK_TIMEOUT_MS);
     audioBuffer.current = [];
@@ -440,7 +610,9 @@ export function useGeminiLive({ enabled, onError, onAudioResponse, onAudioChunk,
       return false;
     }
     try {
-      ws.send(JSON.stringify({ type: "interrupt" }));
+      // Live models an interruption as a new realtime activity; an empty
+      // activity marker cancels generation without manufacturing user text.
+      ws.send(JSON.stringify({ realtime_input: { activity_start: {} } }));
       setStatus("idle");
       return true;
     } catch {
@@ -460,12 +632,4 @@ export function useGeminiLive({ enabled, onError, onAudioResponse, onAudioChunk,
   }, []);
 
   return { status, errorMessage, turns, sendText, interrupt, clearTurns };
-}
-
-function buildLiveUrl(): string {
-  // Replace http(s) with ws(s) — the API base may be http://127.0.0.1 in a
-  // debug build or https://... in preview/production.
-  const base = config.apiBaseURL.replace(/^http/i, "ws");
-  assertSecureTransport(config.apiBaseURL);
-  return `${base}/v1/voice/live`;
 }

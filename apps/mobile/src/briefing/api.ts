@@ -6,7 +6,7 @@
  * fetched here on demand and never cached: mail changes, and a stale body is
  * worse than a short wait.
  */
-import { apiFetch } from "../api/client";
+import { apiFetch } from "../api/convexApi";
 import type { EmailBody } from "../types";
 
 export async function fetchEmailBody(emailID: string): Promise<EmailBody> {

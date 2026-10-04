@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { ApiError } from "../api/client";
+import { ApiError } from "../api/convexApi";
 import type { ProactivePreferences } from "../types";
 import { fetchProactivePrefs, updateProactivePrefs } from "./api";
 

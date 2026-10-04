@@ -44,7 +44,10 @@ export function GradientButton({
   // action twice while the first is in flight.
   const inert = disabled || loading;
 
-  const glyph = icon ? <Ionicons name={icon} size={compact ? 15 : 18} color={palette.textInverse} /> : null;
+  // The label always sits on the indigo→violet fill, so it is white in BOTH
+  // themes — `textInverse` flips to near-black in dark mode and would vanish.
+  const ON_GRADIENT = "#ffffff";
+  const glyph = icon ? <Ionicons name={icon} size={compact ? 15 : 18} color={ON_GRADIENT} /> : null;
 
   return (
     <PressableScale
@@ -58,25 +61,25 @@ export function GradientButton({
         styles.button,
         compact ? styles.compact : null,
         fullWidth ? styles.fullWidth : null,
-        { backgroundColor: palette.ambient },
+        { backgroundColor: palette.gradientStart },
         inert ? styles.inert : elevation.md,
         style,
       ]}
     >
       <SoftGradient
-        colors={[palette.ambient, palette.ambientDeep]}
+        colors={[palette.gradientStart, palette.gradientEnd]}
         direction="diagonal"
         bands={12}
         radius={radius.pill}
       />
       {loading ? (
-        <ActivityIndicator color={palette.textInverse} />
+        <ActivityIndicator color={ON_GRADIENT} />
       ) : (
         <View style={[styles.content, compact ? styles.contentCompact : null]}>
           {iconTrailing ? null : glyph}
           <Text
             numberOfLines={1}
-            style={[styles.label, compact ? styles.labelCompact : null, { color: palette.textInverse }]}
+            style={[styles.label, compact ? styles.labelCompact : null, { color: ON_GRADIENT }]}
           >
             {label}
           </Text>
