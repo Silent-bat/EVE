@@ -4,9 +4,9 @@
   "private": true,
   "description": "Web test bed for the EVE particle orbs (particleorb1 / particleorb2)",
   "scripts": {
-    "dev": "next dev -p 3210",
-    "build": "next build",
-    "start": "next start -p 3210",
+    "dev": "node init && next dev -p 3210",
+    "build": "node init && next build",
+    "start": "node init && next start -p 3210",
     "typecheck": "tsc --noEmit",
     "capture": "node scripts/capture.mjs"
   },

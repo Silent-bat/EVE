@@ -17,15 +17,17 @@
  * screen rather than a column of empty headings.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { StyleSheet, View, type LayoutChangeEvent } from "react-native";
+import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 import { VoiceDock } from "./VoiceDock";
 import { StatStrip } from "./StatStrip";
 import { TodayHeader } from "./TodayHeader";
 import { displayName, type DayContext } from "./greeting";
 import { fetchInbox, markThought } from "../proactive/api";
-import { AttentionCard, CalendarCard, NextUpCard, Section, SuggestionCard } from "../ui/components";
+import { AttentionCard, CalendarCard, GradientButton, NextUpCard, Section, SuggestionCard } from "../ui/components";
 import { spacing } from "../ui/theme";
+import { useTheme } from "../ui/ThemeContext";
 import type { Briefing, BriefingEmail, CalendarEvent, EmailStatus, ProactiveThought } from "../types";
 
 type Props = {
@@ -35,6 +37,12 @@ type Props = {
   /** Falls back to the mailbox for the greeting when there's no name. */
   email: string | null;
   photoURL?: string | null;
+  /** True once the user has connected Gmail (drives the simple-vs-full UX). */
+  gmailConnected?: boolean;
+  /** Kicks off the Gmail connect flow from the simple-mode prompt. */
+  onConnectGmail?: () => void;
+  /** Opens the full Email insights screen (Gmail users). */
+  onOpenInsights?: () => void;
   /** True while an email action is in flight, from App.tsx. */
   saving: boolean;
   /** Whether the always-on ask dock is switched on in settings. */
@@ -61,6 +69,9 @@ export function TodayScreen({
   name,
   email,
   photoURL,
+  gmailConnected = true,
+  onConnectGmail,
+  onOpenInsights,
   saving,
   askEnabled = false,
   voiceActive = false,
@@ -72,6 +83,7 @@ export function TodayScreen({
   onScrollTo,
   onError,
 }: Props) {
+  const { palette } = useTheme();
   // Where the header bell scrolls to. Measured rather than computed, because
   // the section above collapses when empty and its height isn't knowable here.
   const [offsets, setOffsets] = useState<Record<string, number>>({});
@@ -163,6 +175,29 @@ export function TodayScreen({
         onPressAlerts={onScrollTo ? () => onScrollTo(alertTarget ?? 0) : undefined}
       />
 
+      {/* EVE's assist card — the signature element from the new design. When
+          there's something waiting, EVE offers to take it on; tapping opens the
+          conversation. Hidden when there's nothing to act on. */}
+      {pending.length + thoughts.length > 0 ? (
+        <Pressable
+          onPress={onOpenChat}
+          style={[styles.assist, { backgroundColor: palette.primaryTint, borderColor: palette.primary }]}
+          accessibilityRole="button"
+          accessibilityLabel="Ask EVE to help with today's items"
+        >
+          <View style={[styles.assistOrb, { backgroundColor: palette.primary }]}>
+            <Ionicons name="sparkles" size={16} color={palette.onPrimary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.assistTitle, { color: palette.text }]}>EVE</Text>
+            <Text style={[styles.assistBody, { color: palette.textMuted }]}>
+              You have {pending.length + thoughts.length} thing
+              {pending.length + thoughts.length > 1 ? "s" : ""} that need you today. Shall I help with them?
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={palette.primary} />
+        </Pressable>
+      ) : null}
       {/* Sits directly under the greeting when switched on: the microphone is
           open the moment the app opens, without leaving this page. */}
       {askEnabled && !voiceActive ? (
@@ -171,9 +206,34 @@ export function TodayScreen({
         </View>
       ) : null}
 
-      <View style={styles.stats}>
-        <StatStrip briefing={briefing} />
-      </View>
+      {gmailConnected ? (
+        <View style={styles.stats}>
+          <StatStrip briefing={briefing} />
+          <Pressable
+            onPress={onOpenInsights}
+            style={styles.insightsLink}
+            accessibilityRole="button"
+            accessibilityLabel="Open email insights"
+          >
+            <Ionicons name="mail-outline" size={16} color={palette.primary} />
+            <Text style={[styles.insightsText, { color: palette.primary }]}>Email insights</Text>
+            <Ionicons name="chevron-forward" size={15} color={palette.primary} />
+          </Pressable>
+        </View>
+      ) : null}
+
+      {/* Simple mode: EVE works without Gmail (chat, notification triage,
+          tasks). Connecting Gmail unlocks briefings, drafts and email triage. */}
+      <Section
+        title="Connect Gmail"
+        subtitle="EVE is running in simple mode. Connect Gmail to get inbox briefings, smart reply drafts, and email prioritization."
+        icon="mail-outline"
+        hidden={gmailConnected}
+      >
+        <View style={styles.connect}>
+          <GradientButton label="Connect Gmail" icon="logo-google" onPress={() => onConnectGmail?.()} />
+        </View>
+      </Section>
 
       <View onLayout={measure("attention")}>
         <Section
@@ -267,4 +327,26 @@ const styles = StyleSheet.create({
   screen: { gap: 0 },
   ask: { marginTop: spacing.xl },
   stats: { marginTop: spacing.md },
+  assist: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginTop: spacing.lg,
+    padding: spacing.lg,
+    borderRadius: 18,
+    borderWidth: 1,
+  },
+  assistOrb: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  assistTitle: { fontSize: 13, fontWeight: "800" },
+  assistBody: { fontSize: 14, fontWeight: "500", lineHeight: 20, marginTop: 2 },
+  insightsLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    marginTop: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  insightsText: { fontSize: 14, fontWeight: "700" },
+  connect: { marginTop: spacing.sm, alignItems: "flex-start" },
 });

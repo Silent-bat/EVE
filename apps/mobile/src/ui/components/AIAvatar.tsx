@@ -49,15 +49,15 @@ export function AIAvatar({
           alignItems: "center",
           justifyContent: "center",
           overflow: "hidden",
-          backgroundColor: palette.ambient,
+          backgroundColor: palette.gradientStart,
         },
         style,
       ]}
     >
       {flat ? null : (
-        <SoftGradient colors={[palette.ambient, palette.ambientDeep]} direction="diagonal" bands={10} />
+        <SoftGradient colors={[palette.gradientStart, palette.gradientEnd]} direction="diagonal" bands={10} />
       )}
-      <Ionicons name="sparkles" size={glyph} color={palette.textInverse} />
+      <Ionicons name="sparkles" size={glyph} color="#ffffff" />
     </View>
   );
 }

@@ -8,7 +8,14 @@ import {
   logRequest,
   writeErrorResponse,
 } from "./src/http/middleware.mjs";
-import { httpError, readJSON, writeAuthRedirect, writeHTML, writeJSON } from "./src/http/responses.mjs";
+import {
+  httpError,
+  readJSON,
+  writeAuthRedirect,
+  writeGoogleConnectedRedirect,
+  writeHTML,
+  writeJSON,
+} from "./src/http/responses.mjs";
 import { dayKeyInZone } from "./src/utils/dates.mjs";
 import {
   close as closeStorage,
@@ -410,7 +417,7 @@ const server = http.createServer(async (request, response) => {
       };
       invalidateBriefingCache(userID);
       await saveState();
-      writeHTML(response, 200, "Google connected. You can return to EVE.");
+      writeGoogleConnectedRedirect(response, stateEntry.returnTo);
       return;
     }
 
@@ -482,7 +489,9 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/v1/google/auth-url") {
-      writeJSON(response, 200, await googleAuthURL(userID, "connect"));
+      const returnTo = url.searchParams.get("returnTo") ?? "";
+      if (returnTo.length > MAX_RETURN_TO_CHARS) throw httpError(400, "returnTo is too long");
+      writeJSON(response, 200, await googleAuthURL(userID, "connect", returnTo));
       return;
     }
 

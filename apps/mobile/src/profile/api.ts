@@ -4,7 +4,7 @@
  * tone preference — that the backend splices into the email-ranking
  * prompt so a client reply outranks a generic confirmation.
  */
-import { apiFetch } from "../api/client";
+import { apiFetch } from "../api/convexApi";
 import type { UserProfile } from "../types";
 
 export async function fetchProfile(): Promise<UserProfile> {

@@ -158,7 +158,7 @@ export function Segmented<T extends string>({
   options,
   value,
   onChange,
-  tone = "neutral",
+  tone = "ambient",
   label,
 }: {
   options: { value: T; label: string }[];
@@ -400,8 +400,7 @@ function makeStyles({ palette, type }: ThemeValue) {
     chipText: {
       fontSize: 11,
       fontWeight: "700",
-      letterSpacing: 0.3,
-      textTransform: "uppercase",
+      letterSpacing: 0.2,
     },
     sectionHeader: {
       marginTop: spacing.xl,

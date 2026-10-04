@@ -32,6 +32,7 @@ export function MailScreen({
   email,
   visible,
   saving = false,
+  focusReply = false,
   onAction,
   onClose,
 }: {
@@ -39,6 +40,8 @@ export function MailScreen({
   email: BriefingEmail | null;
   visible: boolean;
   saving?: boolean;
+  /** Opened via "Draft reply": scroll to the reply/draft section on open. */
+  focusReply?: boolean;
   onAction?: (emailID: string, status: Exclude<EmailStatus, "pending">) => void;
   onClose: () => void;
 }) {
@@ -48,6 +51,9 @@ export function MailScreen({
   const [full, setFull] = useState<EmailBody | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // Scroll-to-reply support for the "Draft reply" entry point.
+  const scrollRef = useRef<ScrollView>(null);
+  const draftY = useRef(0);
 
   const emailID = email?.id ?? null;
 
@@ -95,9 +101,32 @@ export function MailScreen({
     };
   }, [visible, emailID, load]);
 
+  // When opened via "Draft reply", scroll to the reply/draft section once the
+  // body has settled so the reply is what the user lands on.
+  useEffect(() => {
+    if (!visible || !focusReply) return;
+    const t = setTimeout(() => {
+      if (draftY.current > 0) scrollRef.current?.scrollTo({ y: draftY.current, animated: true });
+    }, 350);
+    return () => clearTimeout(t);
+  }, [visible, focusReply, full]);
+
   if (!email) return null;
 
-  const shown = full ?? email;
+  // The header must stay readable even when the body fetch fails. getEmailBody
+  // returns placeholder header fields ("(no subject)", empty sender) on a Gmail
+  // miss, so prefer the real values the list row already carries; only take the
+  // freshly-fetched header fields when they're actually present. The body,
+  // summary, draft and status still come from their own sources below.
+  const shown = full
+    ? {
+        ...email,
+        subject: full.subject && full.subject !== "(no subject)" ? full.subject : email.subject,
+        senderName: full.senderName || email.senderName,
+        senderEmail: full.senderEmail || email.senderEmail,
+        receivedAt: full.receivedAt || email.receivedAt,
+      }
+    : email;
   const tone = emailUrgencyTone(shown.urgencyScore);
   const pending = shown.status === "pending";
 
@@ -106,7 +135,7 @@ export function MailScreen({
       <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
         <TopNav title="Message" onBack={onClose} backIcon="close" backLabel="Close message" />
 
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView ref={scrollRef} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <Text style={styles.subject}>{shown.subject}</Text>
 
           <View style={styles.from}>
@@ -149,6 +178,7 @@ export function MailScreen({
           ) : null}
 
           {shown.draftReply ? (
+            <View onLayout={(e) => (draftY.current = e.nativeEvent.layout.y)}>
             <Card style={styles.draft}>
               <View style={styles.readHeader}>
                 <Ionicons name="create-outline" size={13} color={palette.ambient} />
@@ -183,6 +213,7 @@ export function MailScreen({
                 </Text>
               )}
             </Card>
+            </View>
           ) : null}
         </ScrollView>
       </SafeAreaView>

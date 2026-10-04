@@ -41,29 +41,16 @@ export function TodayHeader({
   const styles = useThemedStyles(makeStyles);
 
   const avatar = <UserAvatar photoURL={photoURL} name={name} email={email} size="lg" />;
+  // The greeting already varies by hour, so the icon has to as well — a sun next
+  // to "Good evening" reads as a bug.
+  const hour = new Date().getHours();
+  const timeIcon: keyof typeof Ionicons.glyphMap =
+    hour < 12 ? "sunny" : hour < 18 ? "partly-sunny" : "moon";
 
   return (
     <View style={styles.wrap}>
       <View style={styles.row}>
-        {onPressAvatar ? (
-          <PressableScale
-            onPress={onPressAvatar}
-            hitSlop={HIT_SLOP}
-            accessibilityRole="button"
-            accessibilityLabel="Your profile and settings"
-            accessibilityHint="Opens the menu"
-          >
-            {avatar}
-          </PressableScale>
-        ) : (
-          avatar
-        )}
-
-        <View style={styles.who}>
-          <Text style={styles.eyebrow}>HI, {name.toUpperCase()}</Text>
-          <Text style={styles.welcome}>Welcome back</Text>
-        </View>
-
+        <View style={styles.flexOne} />
         {onPressAlerts ? (
           <PressableScale
             onPress={onPressAlerts}
@@ -78,10 +65,29 @@ export function TodayHeader({
             {alertCount > 0 ? <View style={[styles.dot, { borderColor: palette.background }]} /> : null}
           </PressableScale>
         ) : null}
+
+        {onPressAvatar ? (
+          <PressableScale
+            onPress={onPressAvatar}
+            hitSlop={HIT_SLOP}
+            accessibilityRole="button"
+            accessibilityLabel="Your profile and settings"
+            accessibilityHint="Opens the menu"
+          >
+            {avatar}
+          </PressableScale>
+        ) : (
+          avatar
+        )}
       </View>
 
       <View style={styles.greeting}>
-        <Text style={styles.hero}>{salutation()}</Text>
+        <View style={styles.heroRow}>
+          <Ionicons name={timeIcon} size={24} color={palette.warning} />
+          <Text style={styles.hero} numberOfLines={1}>
+            {salutation()}, {name.split(" ")[0]}
+          </Text>
+        </View>
         <Text style={styles.line}>{contextLine(context)}</Text>
       </View>
     </View>
@@ -90,16 +96,9 @@ export function TodayHeader({
 
 function makeStyles({ palette, type }: ThemeValue) {
   return StyleSheet.create({
-    wrap: { gap: spacing.xxl },
+    wrap: { gap: spacing.lg },
     row: { flexDirection: "row", alignItems: "center", gap: spacing.md },
-    who: { flex: 1, gap: 2 },
-    eyebrow: {
-      ...type.caption,
-      fontSize: 12,
-      letterSpacing: 0.8,
-      color: palette.textMuted,
-    },
-    welcome: { ...type.title, fontSize: 18 },
+    flexOne: { flex: 1 },
     bell: {
       width: 48,
       height: 48,
@@ -121,8 +120,9 @@ function makeStyles({ palette, type }: ThemeValue) {
       backgroundColor: palette.danger,
       borderWidth: 2,
     },
-    greeting: { gap: spacing.md },
-    hero: { ...type.heroLg },
+    greeting: { gap: spacing.sm },
+    heroRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+    hero: { ...type.hero, flexShrink: 1 },
     // The context line is the payload of the header, so it gets body weight
     // rather than caption — it is meant to be read, not skimmed past.
     line: { ...type.lead, color: palette.textMuted, maxWidth: 320 },

@@ -1,8 +1,7 @@
 .DS_Store
 .idea/
-.env
-.env.*
 !.env.example
+!convex/.env.example
 !services/api-node/tests/.env.test.example
 .eve-data/
 *.log
@@ -28,3 +27,4 @@ apps/mobile/android/app/debug.keystore
 branch_structure.json
 temp_auto_push.bat
 temp_interactive_push.bat
+config.bat
